@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+{% block title %}History · Yeems Coffee{% endblock %}
+
+{% block head_extra %}
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+{% endblock %}
+
+{% block header_action %}
+<div class="header-action">
+  <a href="{{ url_for('main.index') }}">↑ Upload Report</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="results-header">
+  <h1>Historical Performance</h1>
+  <div class="date">Kitchen ticket on-target rate over time</div>
+</div>
+
+<!-- Date range picker -->
+<div class="section" style="padding: 16px 24px;">
+  <form method="get" action="{{ url_for('main.history') }}" style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+    <label style="font-weight:700; color:var(--green); font-size:14px;">Date range</label>
+    <input type="date" name="from" value="{{ from_date or '' }}"
+           min="{{ earliest or '' }}" max="{{ latest or '' }}"
+           style="padding:7px 10px; border:2px solid var(--gray-light); border-radius:8px; font-family:inherit; font-size:14px;">
+    <span style="color:var(--gray);">to</span>
+    <input type="date" name="to" value="{{ to_date or '' }}"
+           min="{{ earliest or '' }}" max="{{ latest or '' }}"
+           style="padding:7px 10px; border:2px solid var(--gray-light); border-radius:8px; font-family:inherit; font-size:14px;">
+    <button type="submit" style="padding:7px 18px; background:var(--green); color:var(--cream); border:none; border-radius:8px; font-weight:700; font-size:14px; cursor:pointer; font-family:inherit;">Apply</button>
+    {% if from_date != earliest or to_date != latest %}
+      <a href="{{ url_for('main.history') }}" style="font-size:14px; color:var(--gray);">Reset</a>
+    {% endif %}
+  </form>
+</div>
+
+{% if not rows %}
+  <div class="section" style="text-align:center; padding:60px; color:var(--gray);">
+    <div style="font-size:48px; margin-bottom:16px;">📭</div>
+    <div style="font-size:18px; font-weight:700;">No data yet</div>
+    <div style="margin-top:8px;">Upload your first daily report to start building history.</div>
+    <a href="{{ url_for('main.index') }}" class="btn" style="width:auto; display:inline-block; margin-top:20px; padding:12px 28px;">Upload a Report</a>
+  </div>
+{% else %}
+
+<!-- Period summary stats -->
+<div class="stat-grid">
+  <div class="stat-card">
+    <div class="label">Days on Record</div>
+    <div class="value">{{ period_days }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Total Tickets</div>
+    <div class="value">{{ "{:,}".format(total_tickets) }}</div>
+  </div>
+  <div class="stat-card {% if pct_on_target_avg < 70 %}danger{% elif pct_on_target_avg < 85 %}amber{% endif %}">
+    <div class="label">Avg On-Target</div>
+    <div class="value">{{ pct_on_target_avg }}%</div>
+    <div class="sub">across all days</div>
+  </div>
+  <div class="stat-card danger">
+    <div class="label">Total Over Target</div>
+    <div class="value">{{ total_over }}</div>
+    <div class="sub">{{ "%.1f"|format(total_over / total_tickets * 100) }}% of all tickets</div>
+  </div>
+  <div class="stat-card amber">
+    <div class="label">Worst Day</div>
+    <div class="value" style="font-size:22px;">{{ worst_day.pct_on_target }}%</div>
+    <div class="sub">{{ worst_day.report_date }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Best Day</div>
+    <div class="value" style="font-size:22px;">{{ best_day.pct_on_target }}%</div>
+    <div class="sub">{{ best_day.report_date }}</div>
+  </div>
+</div>
+
+<!-- On-target % trend -->
+<div class="section">
+  <h2>📈 On-Target Rate Over Time</h2>
+  <div class="section-sub">Daily percentage of tickets completed within the 4:54 target.</div>
+  <div id="trend-chart" class="chart"></div>
+</div>
+
+<!-- Daily ticket volume -->
+<div class="section">
+  <h2>📊 Daily Ticket Volume</h2>
+  <div class="section-sub">On-target vs over-target tickets per day.</div>
+  <div id="volume-chart" class="chart"></div>
+</div>
+
+<!-- Average ticket time -->
+<div class="section">
+  <h2>⏱ Average Ticket Time</h2>
+  <div class="section-sub">Daily average completion time vs the 4:54 target (294 sec).</div>
+  <div id="avg-chart" class="chart"></div>
+</div>
+
+<!-- Source performance trend -->
+<div class="section">
+  <h2>🛒 On-Target Rate by Order Source</h2>
+  <div class="section-sub">How each channel is trending over time.</div>
+  <div id="source-chart" class="chart"></div>
+</div>
+
+<!-- Day-by-day table -->
+<div class="section">
+  <h2>📋 Day-by-Day Breakdown</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Total</th>
+          <th>On Target</th>
+          <th>Over Target</th>
+          <th>On-Target %</th>
+          <th>Avg Time</th>
+          <th>Longest</th>
+          <th>Clusters</th>
+          <th>Uploaded</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows | reverse %}
+          <tr>
+            <td><strong>{{ r.report_date }}</strong></td>
+            <td>{{ r.total_tickets }}</td>
+            <td style="color:var(--green); font-weight:700;">{{ r.on_time_count }}</td>
+            <td style="color:var(--red); font-weight:700;">{{ r.over_count }}</td>
+            <td>
+              <span class="duration-cell {% if r.pct_on_target < 70 %}over{% elif r.pct_on_target >= 85 %}ok{% endif %}">
+                {{ r.pct_on_target }}%
+              </span>
+            </td>
+            <td class="duration-cell {% if r.avg_seconds > 294 %}over{% else %}ok{% endif %}">
+              {{ r.avg_seconds // 60 }}:{{ "%02d" % (r.avg_seconds % 60) }}
+            </td>
+            <td class="duration-cell over">
+              {{ r.longest_seconds // 60 }}:{{ "%02d" % (r.longest_seconds % 60) }}
+            </td>
+            <td>{{ r.cluster_count }}</td>
+            <td style="color:var(--gray); font-size:13px;">{{ r.uploaded_at }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if charts %}
+<script>
+  const cfg = { responsive: true, displayModeBar: false };
+  const layout = (extra = {}) => Object.assign({
+    margin: { l: 60, r: 20, t: 10, b: 60 },
+    paper_bgcolor: '#fff',
+    plot_bgcolor: '#fff',
+    font: { family: 'Nunito, sans-serif', color: '#1f2937' },
+    legend: { orientation: 'h', y: -0.25 },
+  }, extra);
+
+  Plotly.newPlot('trend-chart', {{ charts.trend | safe }}, layout({
+    yaxis: { title: 'On-Target %', range: [0, 100], gridcolor: '#e5e7eb' },
+    xaxis: { showgrid: false },
+    shapes: [{ type: 'line', x0: 0, x1: 1, xref: 'paper', y0: 85, y1: 85,
+               line: { color: '#d97706', width: 1.5, dash: 'dot' } }],
+  }), cfg);
+
+  Plotly.newPlot('volume-chart', {{ charts.volume | safe }}, layout({
+    barmode: 'stack',
+    xaxis: { showgrid: false },
+    yaxis: { title: 'Tickets', gridcolor: '#e5e7eb' },
+  }), cfg);
+
+  Plotly.newPlot('avg-chart', {{ charts.avg | safe }}, layout({
+    xaxis: { showgrid: false },
+    yaxis: { title: 'Seconds', gridcolor: '#e5e7eb' },
+  }), cfg);
+
+  Plotly.newPlot('source-chart', {{ charts.sources | safe }}, layout({
+    xaxis: { showgrid: false },
+    yaxis: { title: 'On-Target %', range: [0, 100], gridcolor: '#e5e7eb' },
+  }), cfg);
+</script>
+{% endif %}
+{% endblock %}
