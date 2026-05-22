@@ -107,6 +107,7 @@ body {
   border: 1px solid var(--gray-light);
 }
 .dropzone {
+  display: block;
   border: 2px dashed var(--green);
   background: var(--cream);
   border-radius: 12px;
@@ -133,7 +134,7 @@ body {
 }
 .dropzone input[type=file] { display: none; }
 .btn {
-  display: inline-block;
+  display: block;
   width: 100%;
   background: var(--green);
   color: var(--cream);
@@ -146,6 +147,9 @@ body {
   margin-top: 20px;
   transition: background 0.15s;
   font-family: inherit;
+  white-space: nowrap;
+  line-height: 1.2;
+  text-align: center;
 }
 .btn:hover { background: var(--green-dark); }
 .btn:disabled { background: var(--gray); cursor: not-allowed; }
