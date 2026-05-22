@@ -1,0 +1,212 @@
+{% extends "base.html" %}
+{% block title %}Results · {{ report_date }} · Yeems Coffee{% endblock %}
+
+{% block head_extra %}
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+{% endblock %}
+
+{% block header_action %}
+<div class="header-action">
+  <a href="{{ url_for('main.index') }}">↑ Upload Another</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="results-header">
+  <h1>Daily Performance</h1>
+  <div class="date">{{ report_date }} · target {{ target_fmt }}</div>
+</div>
+
+<!-- Summary stat cards -->
+<div class="stat-grid">
+  <div class="stat-card">
+    <div class="label">Total Tickets</div>
+    <div class="value">{{ total_tickets }}</div>
+  </div>
+  <div class="stat-card {% if pct_on_target < 70 %}danger{% elif pct_on_target < 85 %}amber{% endif %}">
+    <div class="label">On Target</div>
+    <div class="value">{{ pct_on_target }}%</div>
+    <div class="sub">{{ on_time_count }} tickets</div>
+  </div>
+  <div class="stat-card danger">
+    <div class="label">Over Target</div>
+    <div class="value">{{ over_count }}</div>
+    <div class="sub">{{ pct_over }}% of total</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Avg Time</div>
+    <div class="value">{{ avg_fmt }}</div>
+    <div class="sub">target {{ target_fmt }}</div>
+  </div>
+  <div class="stat-card amber">
+    <div class="label">Clusters</div>
+    <div class="value">{{ clusters | length }}</div>
+    <div class="sub">3+ over in a row</div>
+  </div>
+</div>
+
+<!-- Longest ticket banner -->
+<div class="longest-banner">
+  <div>
+    <div class="label">Longest Ticket of the Day</div>
+    <div class="big-time">{{ longest_fmt }}</div>
+  </div>
+  <div>
+    <div class="ticket-name">{{ longest_ticket_name }}</div>
+    <div class="ticket-meta">
+      {{ longest_ticket_time }} · {{ longest_ticket_source }} · {{ longest_over_by }} over target<br>
+      <em>{{ longest_ticket_items }}</em>
+    </div>
+  </div>
+</div>
+
+<!-- Clusters -->
+<div class="section">
+  <h2>🔴 Over-Target Clusters</h2>
+  <div class="section-sub">Streaks of 3 or more consecutive tickets that missed the target. These show the rush periods where the kitchen fell behind.</div>
+  {% if clusters %}
+    {% for c in clusters %}
+      <div class="cluster">
+        <div class="cluster-header">
+          <div class="cluster-title">{{ c.ticket_count }} tickets in a row · {{ c.start_time }} – {{ c.end_time }}</div>
+          <div class="cluster-meta">
+            <span><strong>Avg:</strong> {{ c.avg_fmt }}</span>
+            <span><strong>Max:</strong> {{ c.max_fmt }}</span>
+            <span><strong>Window:</strong> {{ c.duration_minutes }} min</span>
+          </div>
+        </div>
+        <div class="cluster-tickets">
+          {% for t in c.tickets %}
+            <div class="cluster-ticket">
+              <div><span class="name">{{ t.name }}</span> <span class="duration">{{ t.duration_fmt }}</span></div>
+              <div class="time">{{ t.time }} · {{ t.source }} · +{{ t.over_by }} over</div>
+              <div class="items">{{ t.items }}</div>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    {% endfor %}
+  {% else %}
+    <div class="no-clusters">✅ No clusters of 3+ consecutive over-target tickets today. Nice work!</div>
+  {% endif %}
+</div>
+
+<!-- Longest Tickets Chart -->
+<div class="section">
+  <h2>📊 Top 15 Longest Tickets</h2>
+  <div class="section-sub">The slowest tickets of the day — red bars exceed the target of {{ target_fmt }}.</div>
+  <div id="longest-chart" class="chart tall"></div>
+</div>
+
+<!-- Full day timeline -->
+<div class="section">
+  <h2>📈 Full Day Timeline</h2>
+  <div class="section-sub">Every ticket plotted by time of day. The dashed orange line is the target. Red dots are over.</div>
+  <div id="timeline-chart" class="chart"></div>
+</div>
+
+<!-- Hourly + Source side by side -->
+<div class="two-col">
+  <div class="section">
+    <h2>🕐 By Hour</h2>
+    <div class="section-sub">When did the day get rough?</div>
+    <div id="hourly-chart" class="chart short"></div>
+  </div>
+  <div class="section">
+    <h2>🛒 By Order Source</h2>
+    <div class="section-sub">On-target rate per channel.</div>
+    <div class="source-grid">
+      {% for s in sources %}
+        <div class="source-card {% if s.pct_on_target < 70 %}bad{% elif s.pct_on_target < 85 %}warn{% endif %}">
+          <div class="src-name">{{ s.source }}</div>
+          <div class="src-rate">{{ s.pct_on_target }}%</div>
+          <div class="src-detail">{{ s.on_time }} on time / {{ s.total }} total · avg {{ s.avg_fmt }}</div>
+        </div>
+      {% endfor %}
+    </div>
+    <div id="source-chart" class="chart short" style="margin-top: 16px;"></div>
+  </div>
+</div>
+
+<!-- All over-target tickets table -->
+<div class="section">
+  <h2>📋 All Over-Target Tickets ({{ over_count }})</h2>
+  <div class="section-sub">Sorted by longest first. Use the search to filter.</div>
+  <input class="search-bar" type="text" id="ticket-search" placeholder="Search by ticket name, item, or source…">
+  <div class="table-wrap">
+    <table id="tickets-table">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Ticket</th>
+          <th>Duration</th>
+          <th>Over By</th>
+          <th>Source</th>
+          <th>Items</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in all_over %}
+          <tr>
+            <td>{{ t.time }}</td>
+            <td>{{ t.name }}</td>
+            <td class="duration-cell over">{{ t.duration_fmt }}</td>
+            <td>+{{ t.over_by }}</td>
+            <td>{{ t.source }}</td>
+            <td>{{ t.items }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const layout = (extra = {}) => Object.assign({
+    margin: { l: 60, r: 20, t: 10, b: 50 },
+    paper_bgcolor: '#fff',
+    plot_bgcolor: '#fff',
+    font: { family: 'Nunito, sans-serif', color: '#1f2937' },
+    showlegend: true,
+    legend: { orientation: 'h', y: -0.2 },
+  }, extra);
+
+  const config = { responsive: true, displayModeBar: false };
+
+  Plotly.newPlot('timeline-chart', {{ timeline_chart | safe }}, layout({
+    xaxis: { title: 'Time of Day', type: 'category', showgrid: false },
+    yaxis: { title: 'Completion Time (sec)', gridcolor: '#e5e7eb' },
+  }), config);
+
+  Plotly.newPlot('longest-chart', [{{ longest_chart | safe }}], layout({
+    margin: { l: 240, r: 60, t: 10, b: 40 },
+    xaxis: { title: 'Completion Time (sec)', gridcolor: '#e5e7eb' },
+    yaxis: { automargin: true },
+    showlegend: false,
+  }), config);
+
+  Plotly.newPlot('hourly-chart', {{ hourly_chart | safe }}, layout({
+    barmode: 'stack',
+    xaxis: { title: 'Hour', showgrid: false },
+    yaxis: { title: 'Tickets', gridcolor: '#e5e7eb' },
+  }), config);
+
+  Plotly.newPlot('source-chart', {{ source_chart | safe }}, layout({
+    barmode: 'stack',
+    xaxis: { showgrid: false },
+    yaxis: { title: 'Tickets', gridcolor: '#e5e7eb' },
+  }), config);
+
+  // Table search
+  const search = document.getElementById('ticket-search');
+  const rows = document.querySelectorAll('#tickets-table tbody tr');
+  search.addEventListener('input', e => {
+    const q = e.target.value.toLowerCase();
+    rows.forEach(r => {
+      r.style.display = r.textContent.toLowerCase().includes(q) ? '' : 'none';
+    });
+  });
+</script>
+{% endblock %}

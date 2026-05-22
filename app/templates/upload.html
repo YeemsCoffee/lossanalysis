@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="upload-hero">
+  <h1>Kitchen Ticket Loss Analysis</h1>
+  <p>Upload your daily Square kitchen report to instantly see how many tickets went over target, where the rush clusters happened, and the longest ticket of the day.</p>
+</div>
+
+<form class="upload-card" method="post" action="{{ url_for('main.analyze') }}" enctype="multipart/form-data" id="upload-form">
+  <label class="dropzone" id="dropzone" for="file-input">
+    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+      <polyline points="17 8 12 3 7 8"></polyline>
+      <line x1="12" y1="3" x2="12" y2="15"></line>
+    </svg>
+    <div><strong>Drop your CSV here</strong> or click to browse</div>
+    <div class="filename" id="filename"></div>
+    <input type="file" id="file-input" name="report" accept=".csv" required>
+  </label>
+  <button class="btn" type="submit" id="submit-btn" disabled>Analyze Report</button>
+  <div class="target-note">
+    Current target: <strong>4 minutes 54 seconds</strong> per ticket
+  </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const input = document.getElementById('file-input');
+  const dropzone = document.getElementById('dropzone');
+  const filenameEl = document.getElementById('filename');
+  const submitBtn = document.getElementById('submit-btn');
+  const form = document.getElementById('upload-form');
+
+  function setFile(file) {
+    if (!file) return;
+    filenameEl.textContent = file.name;
+    submitBtn.disabled = false;
+  }
+
+  input.addEventListener('change', e => setFile(e.target.files[0]));
+
+  ['dragenter', 'dragover'].forEach(ev =>
+    dropzone.addEventListener(ev, e => { e.preventDefault(); dropzone.classList.add('dragover'); }));
+  ['dragleave', 'drop'].forEach(ev =>
+    dropzone.addEventListener(ev, e => { e.preventDefault(); dropzone.classList.remove('dragover'); }));
+  dropzone.addEventListener('drop', e => {
+    if (e.dataTransfer.files.length) {
+      input.files = e.dataTransfer.files;
+      setFile(e.dataTransfer.files[0]);
+    }
+  });
+
+  form.addEventListener('submit', () => {
+    submitBtn.textContent = 'Analyzing…';
+    submitBtn.disabled = true;
+  });
+</script>
+{% endblock %}

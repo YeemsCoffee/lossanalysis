@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 80" fill="none">
+  <text x="0" y="58" font-family="'Nunito', 'Quicksand', system-ui, sans-serif"
+        font-weight="900" font-size="56" fill="#2B4628" letter-spacing="-1">Yeems</text>
+  <text x="118" y="74" font-family="'Quicksand', system-ui, sans-serif"
+        font-weight="700" font-size="22" fill="#2B4628" transform="rotate(-3 130 65)">coffee</text>
+</svg>
