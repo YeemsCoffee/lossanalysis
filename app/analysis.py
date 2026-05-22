@@ -55,11 +55,17 @@ def parse_report(file_obj):
     return df
 
 
+CLUSTER_MERGE_GAP_MINUTES = 3  # merge clusters whose gap is ≤ this
+
+
 def find_clusters(df, min_size=MIN_CLUSTER_SIZE):
     """
     Find runs of consecutive over-target tickets (sorted by Time Created).
+    After building individual runs, merge any two clusters whose gap is
+    <= CLUSTER_MERGE_GAP_MINUTES into one.
     """
-    clusters = []
+    # Step 1: collect raw runs of over-target tickets with their raw rows
+    raw_runs = []   # list of lists-of-rows
     run = []
 
     for _, row in df.iterrows():
@@ -67,11 +73,28 @@ def find_clusters(df, min_size=MIN_CLUSTER_SIZE):
             run.append(row)
         else:
             if len(run) >= min_size:
-                clusters.append(_build_cluster(run))
+                raw_runs.append(run)
             run = []
     if len(run) >= min_size:
-        clusters.append(_build_cluster(run))
+        raw_runs.append(run)
 
+    if not raw_runs:
+        return []
+
+    # Step 2: merge runs that are within CLUSTER_MERGE_GAP_MINUTES of each other
+    # "gap" = time between last ticket of run A and first ticket of run B
+    merged = [raw_runs[0]]
+    for next_run in raw_runs[1:]:
+        prev_end = merged[-1][-1]["Time Created"]
+        next_start = next_run[0]["Time Created"]
+        gap_minutes = (next_start - prev_end).total_seconds() / 60
+        if gap_minutes <= CLUSTER_MERGE_GAP_MINUTES:
+            merged[-1] = merged[-1] + next_run  # combine into one run
+        else:
+            merged.append(next_run)
+
+    # Step 3: build cluster dicts, keep only those still ≥ min_size
+    clusters = [_build_cluster(r) for r in merged if len(r) >= min_size]
     clusters.sort(key=lambda c: (-c["ticket_count"], -c["avg_seconds"]))
     return clusters
 
