@@ -18,6 +18,25 @@ def fmt_time(seconds):
     return f"{sign}{m}:{s:02d}"
 
 
+def fmt_clock(ts):
+    """Format a Timestamp as '7:05 AM' (cross-platform, no %-I)."""
+    s = ts.strftime("%I:%M %p")
+    return s.lstrip("0")
+
+
+def fmt_hour(hour):
+    """Format an integer hour as '7 AM' (cross-platform)."""
+    s = pd.Timestamp(f"2000-01-01 {hour:02d}:00").strftime("%I %p")
+    return s.lstrip("0")
+
+
+def fmt_date(d):
+    """Format a date as 'Thursday, May 21, 2026' (cross-platform)."""
+    s = d.strftime("%A, %B %d, %Y")
+    # strip leading zero on day-of-month
+    return s.replace(" 0", " ", 1) if " 0" in s else s
+
+
 def parse_report(file_obj):
     """Parse the Square kitchen report CSV."""
     df = pd.read_csv(file_obj)
@@ -61,8 +80,8 @@ def _build_cluster(rows):
     durations = [r["duration"] for r in rows]
     return {
         "ticket_count": len(rows),
-        "start_time": rows[0]["Time Created"].strftime("%-I:%M %p"),
-        "end_time": rows[-1]["Time Created"].strftime("%-I:%M %p"),
+        "start_time": fmt_clock(rows[0]["Time Created"]),
+        "end_time": fmt_clock(rows[-1]["Time Created"]),
         "duration_minutes": round(
             (rows[-1]["Time Created"] - rows[0]["Time Created"]).total_seconds() / 60, 1
         ),
@@ -74,7 +93,7 @@ def _build_cluster(rows):
         "tickets": [
             {
                 "name": str(r["Ticket Name"]),
-                "time": r["Time Created"].strftime("%-I:%M %p"),
+                "time": fmt_clock(r["Time Created"]),
                 "duration": int(r["duration"]),
                 "duration_fmt": fmt_time(r["duration"]),
                 "over_by": fmt_time(r["duration"] - TARGET_SECONDS),
@@ -94,7 +113,7 @@ def hourly_summary(df):
         over = int(grp["over_target"].sum())
         rows.append({
             "hour": int(hour),
-            "hour_label": pd.Timestamp(f"2000-01-01 {hour:02d}:00").strftime("%-I %p"),
+            "hour_label": fmt_hour(hour),
             "total": total,
             "over": over,
             "on_time": total - over,
@@ -134,7 +153,7 @@ def top_offenders(df, n=15):
         out.append({
             "name": str(row["Ticket Name"]),
             "source": str(row["source"]),
-            "time": row["Time Created"].strftime("%-I:%M %p"),
+            "time": fmt_clock(row["Time Created"]),
             "duration": int(row["duration"]),
             "duration_fmt": fmt_time(row["duration"]),
             "over_by": fmt_time(row["duration"] - TARGET_SECONDS),
@@ -152,7 +171,7 @@ def all_over_target(df):
         out.append({
             "name": str(row["Ticket Name"]),
             "source": str(row["source"]),
-            "time": row["Time Created"].strftime("%-I:%M %p"),
+            "time": fmt_clock(row["Time Created"]),
             "duration": int(row["duration"]),
             "duration_fmt": fmt_time(row["duration"]),
             "over_by_seconds": int(row["duration"] - TARGET_SECONDS),
@@ -222,9 +241,9 @@ def build_longest_chart(df, n=15):
 
     return {
         "x": top["duration"].tolist(),
-        "y": [f"{name} · {time}" for name, time in zip(
+        "y": [f"{name} · {fmt_clock(t)}" for name, t in zip(
             top["Ticket Name"].astype(str),
-            top["Time Created"].dt.strftime("%-I:%M %p"))],
+            top["Time Created"])],
         "text": [fmt_time(d) for d in top["duration"].tolist()],
         "textposition": "outside",
         "type": "bar",
@@ -299,7 +318,7 @@ def run_analysis(file_obj):
     pct_on_target = round(on_time_count / total * 100, 1)
     avg_seconds = round(df["duration"].mean())
 
-    report_date = df["Time Created"].dt.date.iloc[0].strftime("%A, %B %-d, %Y")
+    report_date = fmt_date(df["Time Created"].dt.date.iloc[0])
     max_row = df.loc[df["duration"].idxmax()]
 
     hourly = hourly_summary(df)
@@ -321,7 +340,7 @@ def run_analysis(file_obj):
         "longest_over_by": fmt_time(int(max_row["duration"]) - TARGET_SECONDS),
         "longest_ticket_name": str(max_row["Ticket Name"]),
         "longest_ticket_items": str(max_row["Items in Ticket"]),
-        "longest_ticket_time": max_row["Time Created"].strftime("%-I:%M %p"),
+        "longest_ticket_time": fmt_clock(max_row["Time Created"]),
         "longest_ticket_source": str(max_row["source"]),
         "clusters": find_clusters(df),
         "hourly": hourly,
