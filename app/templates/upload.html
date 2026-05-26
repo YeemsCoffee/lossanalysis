@@ -21,6 +21,13 @@
   <div class="target-note">
     Current target: <strong>4 minutes 54 seconds</strong> per ticket
   </div>
+  {% if has_history %}
+  <div class="target-note" style="margin-top:12px;">
+    <a href="{{ url_for('main.history') }}" style="color:var(--green); font-weight:700; text-decoration:none;">
+      📊 View historical performance →
+    </a>
+  </div>
+  {% endif %}
 </form>
 {% endblock %}
 

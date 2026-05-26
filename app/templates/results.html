@@ -7,7 +7,11 @@
 
 {% block header_action %}
 <div class="header-action">
-  <a href="{{ url_for('main.index') }}">↑ Upload Another</a>
+  {% if from_history %}
+    <a href="{{ url_for('main.history') }}">← History</a>
+  {% else %}
+    <a href="{{ url_for('main.index') }}">↑ Upload Another</a>
+  {% endif %}
 </div>
 {% endblock %}
 

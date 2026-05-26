@@ -18,6 +18,10 @@
         <img src="{{ url_for('static', filename='logo.svg') }}" alt="Yeems Coffee">
         <span class="tool-name">Loss Analysis</span>
       </a>
+      <nav class="header-nav">
+        <a href="{{ url_for('main.index') }}" class="nav-link">Upload</a>
+        <a href="{{ url_for('main.history') }}" class="nav-link">History</a>
+      </nav>
       {% block header_action %}{% endblock %}
     </div>
   </header>

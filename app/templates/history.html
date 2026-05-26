@@ -5,46 +5,47 @@
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 {% endblock %}
 
-{% block header_action %}
-<div class="header-action">
-  <a href="{{ url_for('main.index') }}">↑ Upload Report</a>
-</div>
-{% endblock %}
-
 {% block content %}
 <div class="results-header">
   <h1>Historical Performance</h1>
-  <div class="date">Kitchen ticket on-target rate over time</div>
-</div>
-
-<!-- Date range picker -->
-<div class="section" style="padding: 16px 24px;">
-  <form method="get" action="{{ url_for('main.history') }}" style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
-    <label style="font-weight:700; color:var(--green); font-size:14px;">Date range</label>
-    <input type="date" name="from" value="{{ from_date or '' }}"
-           min="{{ earliest or '' }}" max="{{ latest or '' }}"
-           style="padding:7px 10px; border:2px solid var(--gray-light); border-radius:8px; font-family:inherit; font-size:14px;">
-    <span style="color:var(--gray);">to</span>
-    <input type="date" name="to" value="{{ to_date or '' }}"
-           min="{{ earliest or '' }}" max="{{ latest or '' }}"
-           style="padding:7px 10px; border:2px solid var(--gray-light); border-radius:8px; font-family:inherit; font-size:14px;">
-    <button type="submit" style="padding:7px 18px; background:var(--green); color:var(--cream); border:none; border-radius:8px; font-weight:700; font-size:14px; cursor:pointer; font-family:inherit;">Apply</button>
-    {% if from_date != earliest or to_date != latest %}
-      <a href="{{ url_for('main.history') }}" style="font-size:14px; color:var(--gray);">Reset</a>
-    {% endif %}
-  </form>
+  <div class="date">Kitchen ticket trends over time · target 4:54</div>
 </div>
 
 {% if not rows %}
   <div class="section" style="text-align:center; padding:60px; color:var(--gray);">
     <div style="font-size:48px; margin-bottom:16px;">📭</div>
-    <div style="font-size:18px; font-weight:700;">No data yet</div>
+    <div style="font-size:18px; font-weight:700; color:var(--green);">No data yet</div>
     <div style="margin-top:8px;">Upload your first daily report to start building history.</div>
-    <a href="{{ url_for('main.index') }}" class="btn" style="width:auto; display:inline-block; margin-top:20px; padding:12px 28px;">Upload a Report</a>
+    <a href="{{ url_for('main.index') }}" class="btn" style="width:auto; display:inline-block; margin-top:24px; padding:12px 28px;">Upload a Report</a>
   </div>
 {% else %}
 
-<!-- Period summary stats -->
+<!-- Date range picker -->
+<div class="section" style="padding:16px 24px; margin-bottom:16px;">
+  <form method="get" action="{{ url_for('main.history') }}"
+        style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+    <label style="font-weight:700; color:var(--green); font-size:14px;">Date range</label>
+    <input type="date" name="from" value="{{ from_date or '' }}"
+           min="{{ earliest or '' }}" max="{{ latest or '' }}"
+           style="padding:7px 10px; border:2px solid var(--gray-light); border-radius:8px;
+                  font-family:inherit; font-size:14px;">
+    <span style="color:var(--gray);">to</span>
+    <input type="date" name="to" value="{{ to_date or '' }}"
+           min="{{ earliest or '' }}" max="{{ latest or '' }}"
+           style="padding:7px 10px; border:2px solid var(--gray-light); border-radius:8px;
+                  font-family:inherit; font-size:14px;">
+    <button type="submit"
+            style="padding:7px 18px; background:var(--green); color:var(--cream); border:none;
+                   border-radius:8px; font-weight:700; font-size:14px; cursor:pointer;
+                   font-family:inherit;">Apply</button>
+    {% if from_date != earliest or to_date != latest %}
+      <a href="{{ url_for('main.history') }}"
+         style="font-size:14px; color:var(--gray); text-decoration:none;">Reset</a>
+    {% endif %}
+  </form>
+</div>
+
+<!-- Period summary cards -->
 <div class="stat-grid">
   <div class="stat-card">
     <div class="label">Days on Record</div>
@@ -79,34 +80,42 @@
 <!-- On-target % trend -->
 <div class="section">
   <h2>📈 On-Target Rate Over Time</h2>
-  <div class="section-sub">Daily percentage of tickets completed within the 4:54 target.</div>
+  <div class="section-sub">Daily % of tickets completed within the 4:54 target. Dotted line = 85% goal.</div>
   <div id="trend-chart" class="chart"></div>
 </div>
 
-<!-- Daily ticket volume -->
-<div class="section">
-  <h2>📊 Daily Ticket Volume</h2>
-  <div class="section-sub">On-target vs over-target tickets per day.</div>
-  <div id="volume-chart" class="chart"></div>
+<!-- Volume + Avg side by side -->
+<div class="two-col">
+  <div class="section">
+    <h2>📊 Daily Ticket Volume</h2>
+    <div class="section-sub">On-target vs over-target per day.</div>
+    <div id="volume-chart" class="chart short"></div>
+  </div>
+  <div class="section">
+    <h2>⏱ Avg Ticket Time</h2>
+    <div class="section-sub">Daily average vs the 4:54 target (294 sec).</div>
+    <div id="avg-chart" class="chart short"></div>
+  </div>
 </div>
 
-<!-- Average ticket time -->
+<!-- Hour of day heatmap -->
 <div class="section">
-  <h2>⏱ Average Ticket Time</h2>
-  <div class="section-sub">Daily average completion time vs the 4:54 target (294 sec).</div>
-  <div id="avg-chart" class="chart"></div>
+  <h2>🕐 Worst Hours of Day</h2>
+  <div class="section-sub">Average on-target rate per hour across all days in range. Red = below 70%, amber = 70–84%.</div>
+  <div id="hour-chart" class="chart short"></div>
 </div>
 
-<!-- Source performance trend -->
+<!-- Source trend -->
 <div class="section">
   <h2>🛒 On-Target Rate by Order Source</h2>
-  <div class="section-sub">How each channel is trending over time.</div>
+  <div class="section-sub">How each channel trends over time.</div>
   <div id="source-chart" class="chart"></div>
 </div>
 
 <!-- Day-by-day table -->
 <div class="section">
   <h2>📋 Day-by-Day Breakdown</h2>
+  <div class="section-sub">Click any date to see the full single-day report.</div>
   <div class="table-wrap">
     <table>
       <thead>
@@ -118,14 +127,12 @@
           <th>On-Target %</th>
           <th>Avg Time</th>
           <th>Longest</th>
-          <th>Clusters</th>
-          <th>Uploaded</th>
         </tr>
       </thead>
       <tbody>
-        {% for r in rows | reverse %}
-          <tr>
-            <td><strong>{{ r.report_date }}</strong></td>
+        {% for r in rows %}
+          <tr style="cursor:pointer;" onclick="window.location='{{ url_for('main.day', date=r.report_date) }}'">
+            <td><strong style="color:var(--green);">{{ r.report_date }}</strong></td>
             <td>{{ r.total_tickets }}</td>
             <td style="color:var(--green); font-weight:700;">{{ r.on_time_count }}</td>
             <td style="color:var(--red); font-weight:700;">{{ r.over_count }}</td>
@@ -135,13 +142,9 @@
               </span>
             </td>
             <td class="duration-cell {% if r.avg_seconds > 294 %}over{% else %}ok{% endif %}">
-              {{ r.avg_seconds // 60 }}:{{ "%02d" % (r.avg_seconds % 60) }}
+              {{ r.avg_fmt }}
             </td>
-            <td class="duration-cell over">
-              {{ r.longest_seconds // 60 }}:{{ "%02d" % (r.longest_seconds % 60) }}
-            </td>
-            <td>{{ r.cluster_count }}</td>
-            <td style="color:var(--gray); font-size:13px;">{{ r.uploaded_at }}</td>
+            <td class="duration-cell over">{{ r.longest_fmt }}</td>
           </tr>
         {% endfor %}
       </tbody>
@@ -161,14 +164,16 @@
     paper_bgcolor: '#fff',
     plot_bgcolor: '#fff',
     font: { family: 'Nunito, sans-serif', color: '#1f2937' },
-    legend: { orientation: 'h', y: -0.25 },
+    legend: { orientation: 'h', y: -0.3 },
   }, extra);
 
   Plotly.newPlot('trend-chart', {{ charts.trend | safe }}, layout({
     yaxis: { title: 'On-Target %', range: [0, 100], gridcolor: '#e5e7eb' },
     xaxis: { showgrid: false },
-    shapes: [{ type: 'line', x0: 0, x1: 1, xref: 'paper', y0: 85, y1: 85,
-               line: { color: '#d97706', width: 1.5, dash: 'dot' } }],
+    shapes: [{
+      type: 'line', x0: 0, x1: 1, xref: 'paper', y0: 85, y1: 85,
+      line: { color: '#d97706', width: 1.5, dash: 'dot' }
+    }],
   }), cfg);
 
   Plotly.newPlot('volume-chart', {{ charts.volume | safe }}, layout({
@@ -180,6 +185,12 @@
   Plotly.newPlot('avg-chart', {{ charts.avg | safe }}, layout({
     xaxis: { showgrid: false },
     yaxis: { title: 'Seconds', gridcolor: '#e5e7eb' },
+  }), cfg);
+
+  Plotly.newPlot('hour-chart', {{ charts.hour | safe }}, layout({
+    xaxis: { showgrid: false },
+    yaxis: { title: 'Avg On-Target %', range: [0, 100], gridcolor: '#e5e7eb' },
+    showlegend: false,
   }), cfg);
 
   Plotly.newPlot('source-chart', {{ charts.sources | safe }}, layout({
