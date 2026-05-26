@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}Manage Managers · Yeems Coffee{% endblock %}
+
+{% block content %}
+<div class="results-header">
+  <h1>Manage Managers</h1>
+  <div class="date">Create accounts and control access for your team.</div>
+</div>
+
+<!-- Create new user form -->
+<div class="section">
+  <h2>➕ Add Manager</h2>
+  <div class="section-sub">New managers can sign in immediately with the password you set.</div>
+
+  <form method="post" action="{{ url_for('main.admin_create_user') }}"
+        style="display:grid; grid-template-columns:1fr 1fr; gap:16px 24px; align-items:end;">
+    <div class="field-group" style="margin:0;">
+      <label class="field-label">Name</label>
+      <input class="field-input" type="text" name="name" required placeholder="e.g. Jordan Smith">
+    </div>
+    <div class="field-group" style="margin:0;">
+      <label class="field-label">Email</label>
+      <input class="field-input" type="email" name="email" required placeholder="manager@yeemscoffee.com">
+    </div>
+    <div class="field-group" style="margin:0;">
+      <label class="field-label">Temporary Password</label>
+      <input class="field-input" type="text" name="password" required placeholder="They should change this">
+    </div>
+    <div class="field-group" style="margin:0; display:flex; flex-direction:column; gap:8px;">
+      <label class="field-label">Role</label>
+      <label style="display:flex; align-items:center; gap:8px; font-size:14px; color:var(--gray); cursor:pointer;">
+        <input type="checkbox" name="is_admin"
+               style="width:16px; height:16px; accent-color:var(--green);">
+        Admin (can manage other accounts)
+      </label>
+    </div>
+    <div style="grid-column:1/-1;">
+      <button class="btn" type="submit"
+              style="width:auto; display:inline-block; padding:12px 32px;">
+        Create Account
+      </button>
+    </div>
+  </form>
+</div>
+
+<!-- Current users table -->
+<div class="section">
+  <h2>👥 Current Team</h2>
+  <div class="section-sub">{{ users | length }} account{{ '' if users | length == 1 else 's' }} total.</div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Email</th>
+          <th>Role</th>
+          <th>Status</th>
+          <th>Created</th>
+          <th>Last Login</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+          <tr>
+            <td><strong>{{ u.name }}</strong>{% if u.id == current_user.id %} <span style="color:var(--gray);font-size:12px;">(you)</span>{% endif %}</td>
+            <td>{{ u.email }}</td>
+            <td>
+              {% if u.is_admin %}
+                <span style="background:var(--green);color:var(--cream);padding:2px 8px;border-radius:4px;font-size:12px;font-weight:700;">Admin</span>
+              {% else %}
+                <span style="color:var(--gray);font-size:13px;">Manager</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if u.is_active %}
+                <span style="color:var(--green);font-weight:700;font-size:13px;">● Active</span>
+              {% else %}
+                <span style="color:var(--gray);font-weight:700;font-size:13px;">○ Disabled</span>
+              {% endif %}
+            </td>
+            <td style="color:var(--gray);font-size:13px;">{{ u.created_at[:10] if u.created_at else '—' }}</td>
+            <td style="color:var(--gray);font-size:13px;">{{ u.last_login_at[:10] if u.last_login_at else 'Never' }}</td>
+            <td>
+              {% if u.id != current_user.id %}
+                <form method="post"
+                      action="{{ url_for('main.admin_toggle_user', user_id=u.id) }}"
+                      style="display:inline;">
+                  {% if u.is_active %}
+                    <input type="hidden" name="action" value="disable">
+                    <button type="submit"
+                            style="background:none;border:1px solid var(--red);color:var(--red);padding:4px 12px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;"
+                            onclick="return confirm('Disable {{ u.name }}\'s account?')">
+                      Disable
+                    </button>
+                  {% else %}
+                    <input type="hidden" name="action" value="enable">
+                    <button type="submit"
+                            style="background:none;border:1px solid var(--green);color:var(--green);padding:4px 12px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">
+                      Enable
+                    </button>
+                  {% endif %}
+                </form>
+              {% else %}
+                <span style="color:var(--gray);font-size:12px;">—</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

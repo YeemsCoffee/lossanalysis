@@ -1,12 +1,18 @@
-from flask import Blueprint, render_template, request, redirect, url_for, flash
+from flask import (
+    Blueprint, render_template, request, redirect, url_for, flash, abort
+)
+from flask_login import login_required, login_user, logout_user, current_user
+from werkzeug.security import check_password_hash
+
 from .analysis import (
-    parse_report, analyze_df, run_analysis,
-    fmt_time, fmt_hour, source_summary, hourly_summary,
+    parse_report, analyze_df,
+    fmt_time, fmt_hour, source_summary,
     TARGET_SECONDS,
 )
 from .db import (
-    save_day_tickets, get_tickets_df, get_date_bounds,
-    get_distinct_dates,
+    save_day_tickets, get_tickets_df, get_date_bounds, get_distinct_dates,
+    get_user_by_email, update_last_login,
+    create_user, list_users, set_user_active,
 )
 import io
 import json
@@ -15,16 +21,51 @@ bp = Blueprint("main", __name__)
 
 
 # ---------------------------------------------------------------------------
+# Auth routes
+# ---------------------------------------------------------------------------
+
+@bp.route("/login", methods=["GET", "POST"])
+def login():
+    if current_user.is_authenticated:
+        return redirect(url_for("main.index"))
+
+    if request.method == "POST":
+        email    = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+        remember = bool(request.form.get("remember"))
+
+        user = get_user_by_email(email)
+        if user and user.is_active and check_password_hash(user.password_hash, password):
+            login_user(user, remember=remember)
+            update_last_login(user.id)
+            next_page = request.args.get("next")
+            return redirect(next_page or url_for("main.index"))
+
+        flash("Invalid email or password.", "error")
+
+    return render_template("login.html")
+
+
+@bp.route("/logout", methods=["POST"])
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for("main.login"))
+
+
+# ---------------------------------------------------------------------------
 # Upload
 # ---------------------------------------------------------------------------
 
 @bp.route("/", methods=["GET"])
+@login_required
 def index():
     earliest, latest = get_date_bounds()
     return render_template("upload.html", has_history=bool(earliest))
 
 
 @bp.route("/analyze", methods=["POST"])
+@login_required
 def analyze():
     if "report" not in request.files:
         flash("No file selected.", "error")
@@ -52,6 +93,7 @@ def analyze():
 # ---------------------------------------------------------------------------
 
 @bp.route("/day/<date>")
+@login_required
 def day(date):
     df = get_tickets_df(from_date=date, to_date=date)
     if df.empty:
@@ -66,6 +108,7 @@ def day(date):
 # ---------------------------------------------------------------------------
 
 @bp.route("/history")
+@login_required
 def history():
     earliest, latest = get_date_bounds()
 
@@ -86,33 +129,33 @@ def history():
     # ---- Per-day summary rows ------------------------------------------------
     rows = []
     for date_val, day_df in df.groupby("report_date"):
-        total  = len(day_df)
-        over   = int(day_df["over_target"].sum())
+        total   = len(day_df)
+        over    = int(day_df["over_target"].sum())
         on_time = total - over
-        avg    = round(day_df["duration"].mean())
+        avg     = round(day_df["duration"].mean())
         longest = int(day_df["duration"].max())
         rows.append({
-            "report_date":    date_val,
-            "total_tickets":  total,
-            "over_count":     over,
-            "on_time_count":  on_time,
-            "pct_on_target":  round(on_time / total * 100, 1) if total else 0,
-            "avg_seconds":    avg,
-            "avg_fmt":        fmt_time(avg),
+            "report_date":     date_val,
+            "total_tickets":   total,
+            "over_count":      over,
+            "on_time_count":   on_time,
+            "pct_on_target":   round(on_time / total * 100, 1) if total else 0,
+            "avg_seconds":     avg,
+            "avg_fmt":         fmt_time(avg),
             "longest_seconds": longest,
-            "longest_fmt":    fmt_time(longest),
+            "longest_fmt":     fmt_time(longest),
         })
     rows.sort(key=lambda r: r["report_date"], reverse=True)
 
     # ---- Period-wide stats ---------------------------------------------------
-    total_tickets   = sum(r["total_tickets"] for r in rows)
-    total_over      = sum(r["over_count"]    for r in rows)
-    avg_on_target   = round(sum(r["pct_on_target"] for r in rows) / len(rows), 1)
-    worst_day       = min(rows, key=lambda r: r["pct_on_target"])
-    best_day        = max(rows, key=lambda r: r["pct_on_target"])
+    total_tickets = sum(r["total_tickets"] for r in rows)
+    total_over    = sum(r["over_count"]    for r in rows)
+    avg_on_target = round(sum(r["pct_on_target"] for r in rows) / len(rows), 1)
+    worst_day     = min(rows, key=lambda r: r["pct_on_target"])
+    best_day      = max(rows, key=lambda r: r["pct_on_target"])
 
     # ---- Chart data ----------------------------------------------------------
-    dates_asc = sorted(r["report_date"] for r in rows)
+    dates_asc   = sorted(r["report_date"] for r in rows)
     row_by_date = {r["report_date"]: r for r in rows}
 
     # On-target % trend
@@ -155,7 +198,7 @@ def history():
     ]
 
     # Source on-target % trend
-    all_sources = sorted({s["source"] for s in source_summary(df)})
+    all_sources   = sorted({s["source"] for s in source_summary(df)})
     source_colors = ["#2B4628", "#9bc1cb", "#d97706", "#6b7280"]
     source_traces = []
     for i, src in enumerate(all_sources):
@@ -175,22 +218,21 @@ def history():
             "hovertemplate": f"{src}<br>%{{x}}<br><b>%{{y:.1f}}%</b> on target<extra></extra>",
         })
 
-    # Hour-of-day heatmap: avg on-target % per hour across all days in range
+    # Hour-of-day bar chart
     hour_rows = []
     for hour, h_df in df.groupby("hour"):
-        # Per-day on-target rates for this hour, then average them
         daily_rates = []
         for _, day_h_df in h_df.groupby("report_date"):
-            t = len(day_h_df)
+            t    = len(day_h_df)
             on_t = int((~day_h_df["over_target"]).sum())
             daily_rates.append(on_t / t * 100 if t else 0)
         avg_rate  = round(sum(daily_rates) / len(daily_rates), 1)
         total_tix = int(len(h_df))
         hour_rows.append({
-            "hour":       int(hour),
-            "hour_label": fmt_hour(int(hour)),
+            "hour":          int(hour),
+            "hour_label":    fmt_hour(int(hour)),
             "pct_on_target": avg_rate,
-            "total":      total_tix,
+            "total":         total_tix,
         })
     hour_rows.sort(key=lambda x: x["hour"])
 
@@ -231,3 +273,59 @@ def history():
         worst_day=worst_day,
         best_day=best_day,
     )
+
+
+# ---------------------------------------------------------------------------
+# Admin — Manage Managers
+# ---------------------------------------------------------------------------
+
+def _require_admin():
+    if not current_user.is_authenticated or not current_user.is_admin:
+        abort(403)
+
+
+@bp.route("/admin/users")
+@login_required
+def admin_users():
+    _require_admin()
+    users = list_users()
+    return render_template("admin_users.html", users=users)
+
+
+@bp.route("/admin/users/create", methods=["POST"])
+@login_required
+def admin_create_user():
+    _require_admin()
+    email    = request.form.get("email", "").strip()
+    name     = request.form.get("name", "").strip()
+    password = request.form.get("password", "")
+    is_admin = bool(request.form.get("is_admin"))
+
+    if not email or not name or not password:
+        flash("Email, name, and password are all required.", "error")
+        return redirect(url_for("main.admin_users"))
+
+    try:
+        create_user(email, name, password, is_admin=is_admin)
+        flash(f"Account created for {name} ({email}).", "success")
+    except Exception as e:
+        if "UNIQUE" in str(e).upper() or "unique" in str(e).lower():
+            flash(f"An account with that email already exists.", "error")
+        else:
+            flash(f"Could not create account: {e}", "error")
+
+    return redirect(url_for("main.admin_users"))
+
+
+@bp.route("/admin/users/<int:user_id>/toggle", methods=["POST"])
+@login_required
+def admin_toggle_user(user_id):
+    _require_admin()
+    if user_id == current_user.id:
+        flash("You cannot disable your own account.", "error")
+        return redirect(url_for("main.admin_users"))
+
+    action = request.form.get("action", "disable")
+    set_user_active(user_id, active=(action == "enable"))
+    flash(f"Account {'enabled' if action == 'enable' else 'disabled'}.", "success")
+    return redirect(url_for("main.admin_users"))

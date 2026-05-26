@@ -2,3 +2,5 @@ flask>=3.0
 pandas>=2.0
 plotly>=5.0
 gunicorn>=21.0
+psycopg2-binary>=2.9
+flask-login>=0.6

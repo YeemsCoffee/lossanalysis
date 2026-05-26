@@ -18,10 +18,23 @@
         <img src="{{ url_for('static', filename='logo.svg') }}" alt="Yeems Coffee">
         <span class="tool-name">Loss Analysis</span>
       </a>
-      <nav class="header-nav">
-        <a href="{{ url_for('main.index') }}" class="nav-link">Upload</a>
-        <a href="{{ url_for('main.history') }}" class="nav-link">History</a>
-      </nav>
+
+      {% if current_user.is_authenticated %}
+        <nav class="header-nav">
+          <a href="{{ url_for('main.index') }}" class="nav-link">Upload</a>
+          <a href="{{ url_for('main.history') }}" class="nav-link">History</a>
+          {% if current_user.is_admin %}
+            <a href="{{ url_for('main.admin_users') }}" class="nav-link">Manage</a>
+          {% endif %}
+        </nav>
+        <div class="header-user">
+          <span class="user-name">{{ current_user.name }}</span>
+          <form method="post" action="{{ url_for('main.logout') }}" style="display:inline;">
+            <button type="submit" class="btn-signout">Sign Out</button>
+          </form>
+        </div>
+      {% endif %}
+
       {% block header_action %}{% endblock %}
     </div>
   </header>
@@ -29,7 +42,7 @@
   {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
       {% for category, msg in messages %}
-        <div class="flash">{{ msg }}</div>
+        <div class="flash flash-{{ category }}">{{ msg }}</div>
       {% endfor %}
     {% endif %}
   {% endwith %}
