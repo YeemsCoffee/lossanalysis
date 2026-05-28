@@ -298,13 +298,23 @@ def build_source_chart(sources, target_seconds=TARGET_SECONDS):
 # Main entry points
 # ---------------------------------------------------------------------------
 
-def analyze_df(df: pd.DataFrame) -> dict:
+def analyze_df(df: pd.DataFrame, target_seconds=None, target_pct=None) -> dict:
     """
     Full analysis on any properly-typed DataFrame.
     Works for single-day (from CSV) and single-day replay (from DB).
     """
     if df.empty:
         raise ValueError("No ticket data found.")
+
+    if target_seconds is None:
+        target_seconds = TARGET_SECONDS
+    if target_pct is None:
+        target_pct = 85
+
+    # Recalculate over_target and seconds_over using the passed target_seconds
+    df = df.copy()
+    df["over_target"]  = df["duration"] > target_seconds
+    df["seconds_over"] = (df["duration"] - target_seconds).clip(lower=0)
 
     total      = len(df)
     over_count = int(df["over_target"].sum())
@@ -318,8 +328,9 @@ def analyze_df(df: pd.DataFrame) -> dict:
 
     return {
         "report_date":           fmt_date(df["Time Created"].dt.date.iloc[0]),
-        "target_seconds":        TARGET_SECONDS,
-        "target_fmt":            fmt_time(TARGET_SECONDS),
+        "target_seconds":        target_seconds,
+        "target_fmt":            fmt_time(target_seconds),
+        "target_pct":            target_pct,
         "total_tickets":         total,
         "over_count":            over_count,
         "on_time_count":         on_time,
@@ -329,20 +340,20 @@ def analyze_df(df: pd.DataFrame) -> dict:
         "avg_fmt":               fmt_time(avg_sec),
         "longest_seconds":       int(max_row["duration"]),
         "longest_fmt":           fmt_time(int(max_row["duration"])),
-        "longest_over_by":       fmt_time(int(max_row["duration"]) - TARGET_SECONDS),
+        "longest_over_by":       fmt_time(int(max_row["duration"]) - target_seconds),
         "longest_ticket_name":   str(max_row["Ticket Name"]),
         "longest_ticket_items":  str(max_row["Items in Ticket"]),
         "longest_ticket_time":   fmt_clock(max_row["Time Created"]),
         "longest_ticket_source": str(max_row["source"]),
-        "clusters":              _clusters_with_pct(find_clusters(df), len(df)),
+        "clusters":              _clusters_with_pct(find_clusters(df, target_seconds=target_seconds), len(df)),
         "hourly":                hourly,
         "sources":               sources,
-        "top_offenders":         top_offenders(df, n=15),
-        "all_over":              all_over_target(df),
-        "timeline_chart":        json.dumps(build_timeline_chart(df)),
-        "longest_chart":         json.dumps(build_longest_chart(df)),
-        "hourly_chart":          json.dumps(build_hourly_chart(hourly)),
-        "source_chart":          json.dumps(build_source_chart(sources)),
+        "top_offenders":         top_offenders(df, n=15, target_seconds=target_seconds),
+        "all_over":              all_over_target(df, target_seconds=target_seconds),
+        "timeline_chart":        json.dumps(build_timeline_chart(df, target_seconds=target_seconds)),
+        "longest_chart":         json.dumps(build_longest_chart(df, target_seconds=target_seconds)),
+        "hourly_chart":          json.dumps(build_hourly_chart(hourly, target_seconds=target_seconds)),
+        "source_chart":          json.dumps(build_source_chart(sources, target_seconds=target_seconds)),
     }
 
 

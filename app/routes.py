@@ -15,6 +15,7 @@ from .db import (
     create_user, list_users, set_user_active, update_user_location,
     create_reset_token, get_valid_reset_token, mark_token_used,
     update_user_password, bulk_assign_location,
+    get_targets, get_setting, set_setting,
 )
 import io
 import json
@@ -121,11 +122,14 @@ LOCATIONS = ["Gardena", "Koreatown"]
 def index():
     earliest, latest = get_date_bounds()
     user_location = current_user.location if hasattr(current_user, "location") else None
+    targets = get_targets()
     return render_template(
         "upload.html",
         has_history=bool(earliest),
         user_location=user_location,
         locations=LOCATIONS,
+        target_fmt=fmt_time(targets["target_seconds"]),
+        target_pct=targets["target_pct"],
     )
 
 
