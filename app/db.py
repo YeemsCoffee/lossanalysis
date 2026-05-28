@@ -110,6 +110,16 @@ def init_db():
             )
         """)
 
+        cur.execute(f"""
+            CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                id         {pk},
+                user_id    INTEGER NOT NULL,
+                token      TEXT    NOT NULL UNIQUE,
+                expires_at TEXT    NOT NULL,
+                used       INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+
 
 # ---------------------------------------------------------------------------
 # User model (Flask-Login compatible)
@@ -206,6 +216,48 @@ def list_users():
     with _get_cursor() as cur:
         cur.execute("SELECT * FROM users ORDER BY created_at ASC")
         return [User.from_row(r) for r in cur.fetchall()]
+
+
+def update_user_password(user_id: int, new_password: str):
+    from werkzeug.security import generate_password_hash
+    with _get_cursor() as cur:
+        cur.execute(_adapt("UPDATE users SET password_hash = ? WHERE id = ?"),
+                    (generate_password_hash(new_password), user_id))
+
+
+# ---------------------------------------------------------------------------
+# Password reset tokens
+# ---------------------------------------------------------------------------
+
+def create_reset_token(user_id: int) -> str:
+    import secrets
+    from datetime import timedelta
+    token      = secrets.token_urlsafe(32)
+    expires_at = (datetime.now() + timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+    with _get_cursor() as cur:
+        cur.execute(_adapt("""
+            INSERT INTO password_reset_tokens (user_id, token, expires_at, used)
+            VALUES (?, ?, ?, 0)
+        """), (user_id, token, expires_at))
+    return token
+
+
+def get_valid_reset_token(token: str):
+    """Return the token row if it exists, is unused, and hasn't expired."""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with _get_cursor() as cur:
+        cur.execute(_adapt("""
+            SELECT * FROM password_reset_tokens
+            WHERE token = ? AND used = 0 AND expires_at > ?
+        """), (token, now))
+        row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def mark_token_used(token: str):
+    with _get_cursor() as cur:
+        cur.execute(_adapt("UPDATE password_reset_tokens SET used = 1 WHERE token = ?"),
+                    (token,))
 
 
 def seed_admin_if_needed():

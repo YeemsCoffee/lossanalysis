@@ -30,5 +30,11 @@
 
     <button class="btn" type="submit">Sign In</button>
   </form>
+  <div class="target-note" style="margin-top: 20px;">
+    <a href="{{ url_for('main.forgot_password') }}"
+       style="color:var(--green); font-weight:700; text-decoration:none;">
+      Forgot your password?
+    </a>
+  </div>
 </div>
 {% endblock %}

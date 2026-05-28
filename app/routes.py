@@ -13,6 +13,8 @@ from .db import (
     save_day_tickets, get_tickets_df, get_date_bounds, get_distinct_dates,
     get_user_by_email, update_last_login,
     create_user, list_users, set_user_active,
+    create_reset_token, get_valid_reset_token, mark_token_used,
+    update_user_password,
 )
 import io
 import json
@@ -51,6 +53,60 @@ def login():
 def logout():
     logout_user()
     return redirect(url_for("main.login"))
+
+
+@bp.route("/forgot-password", methods=["GET", "POST"])
+def forgot_password():
+    if current_user.is_authenticated:
+        return redirect(url_for("main.index"))
+
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        user  = get_user_by_email(email)
+        if user and user.is_active:
+            try:
+                from .email import send_reset_email
+                token     = create_reset_token(user.id)
+                reset_url = url_for("main.reset_password", token=token, _external=True)
+                send_reset_email(user.email, reset_url, user.name)
+            except Exception as e:
+                # Log but don't reveal the error to the user
+                import logging
+                logging.getLogger(__name__).error(f"Reset email failed: {e}")
+        # Always show the same message — don't reveal whether the email exists
+        flash("If that email is in our system, a reset link is on its way.", "info")
+        return redirect(url_for("main.login"))
+
+    return render_template("forgot_password.html")
+
+
+@bp.route("/reset-password/<token>", methods=["GET", "POST"])
+def reset_password(token):
+    if current_user.is_authenticated:
+        return redirect(url_for("main.index"))
+
+    token_row = get_valid_reset_token(token)
+    if not token_row:
+        flash("This reset link is invalid or has expired. Please request a new one.", "error")
+        return redirect(url_for("main.forgot_password"))
+
+    if request.method == "POST":
+        password = request.form.get("password", "")
+        confirm  = request.form.get("confirm", "")
+
+        if len(password) < 8:
+            flash("Password must be at least 8 characters.", "error")
+            return render_template("reset_password.html", token=token)
+        if password != confirm:
+            flash("Passwords don't match.", "error")
+            return render_template("reset_password.html", token=token)
+
+        update_user_password(token_row["user_id"], password)
+        mark_token_used(token)
+        flash("Password updated — please sign in with your new password.", "success")
+        return redirect(url_for("main.login"))
+
+    return render_template("reset_password.html", token=token)
 
 
 # ---------------------------------------------------------------------------
