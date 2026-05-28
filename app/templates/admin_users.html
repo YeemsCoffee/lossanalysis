@@ -26,6 +26,14 @@
       <label class="field-label">Temporary Password</label>
       <input class="field-input" type="text" name="password" required placeholder="They should change this">
     </div>
+    <div class="field-group" style="margin:0;">
+      <label class="field-label">Location</label>
+      <select class="field-input" name="location">
+        <option value="">All locations (admin)</option>
+        <option value="Gardena">Gardena</option>
+        <option value="Koreatown">Koreatown</option>
+      </select>
+    </div>
     <div class="field-group" style="margin:0; display:flex; flex-direction:column; gap:8px;">
       <label class="field-label">Role</label>
       <label style="display:flex; align-items:center; gap:8px; font-size:14px; color:var(--gray); cursor:pointer;">
@@ -54,10 +62,10 @@
           <th>Name</th>
           <th>Email</th>
           <th>Role</th>
+          <th>Location</th>
           <th>Status</th>
-          <th>Created</th>
           <th>Last Login</th>
-          <th>Action</th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody>
@@ -73,13 +81,30 @@
               {% endif %}
             </td>
             <td>
+              <!-- Inline location change -->
+              <form method="post"
+                    action="{{ url_for('main.admin_update_location', user_id=u.id) }}"
+                    style="display:flex; gap:6px; align-items:center;">
+                <select name="location"
+                        style="padding:4px 8px; border:1px solid var(--gray-light); border-radius:6px;
+                               font-size:12px; font-family:inherit; color:#1f2937;">
+                  <option value="" {% if not u.location %}selected{% endif %}>All</option>
+                  <option value="Gardena" {% if u.location == 'Gardena' %}selected{% endif %}>Gardena</option>
+                  <option value="Koreatown" {% if u.location == 'Koreatown' %}selected{% endif %}>Koreatown</option>
+                </select>
+                <button type="submit"
+                        style="background:none;border:1px solid var(--green);color:var(--green);
+                               padding:3px 10px;border-radius:6px;font-size:11px;font-weight:700;
+                               cursor:pointer;font-family:inherit;">Save</button>
+              </form>
+            </td>
+            <td>
               {% if u.is_active %}
                 <span style="color:var(--green);font-weight:700;font-size:13px;">● Active</span>
               {% else %}
                 <span style="color:var(--gray);font-weight:700;font-size:13px;">○ Disabled</span>
               {% endif %}
             </td>
-            <td style="color:var(--gray);font-size:13px;">{{ u.created_at[:10] if u.created_at else '—' }}</td>
             <td style="color:var(--gray);font-size:13px;">{{ u.last_login_at[:10] if u.last_login_at else 'Never' }}</td>
             <td>
               {% if u.id != current_user.id %}

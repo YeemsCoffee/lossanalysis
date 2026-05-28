@@ -82,6 +82,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS tickets (
                 id              {pk},
                 report_date     TEXT    NOT NULL,
+                location        TEXT,
                 ticket_name     TEXT,
                 order_source    TEXT,
                 num_items       INTEGER,
@@ -106,7 +107,8 @@ def init_db():
                 is_admin      INTEGER NOT NULL DEFAULT 0,
                 is_active     INTEGER NOT NULL DEFAULT 1,
                 created_at    TEXT    NOT NULL,
-                last_login_at TEXT
+                last_login_at TEXT,
+                location      TEXT
             )
         """)
 
@@ -120,6 +122,32 @@ def init_db():
             )
         """)
 
+    # Add location column to existing tables if it doesn't already exist
+    _migrate_add_location_columns()
+
+
+def _migrate_add_location_columns():
+    """Add location column to tickets and users tables if not present (migration)."""
+    if IS_POSTGRES:
+        with _get_cursor() as cur:
+            cur.execute(
+                "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS location TEXT"
+            )
+            cur.execute(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS location TEXT"
+            )
+    else:
+        # SQLite: no IF NOT EXISTS for ALTER TABLE — catch OperationalError if already exists
+        for table in ("tickets", "users"):
+            try:
+                with _get_cursor() as cur:
+                    cur.execute(f"ALTER TABLE {table} ADD COLUMN location TEXT")
+            except Exception as e:
+                if "duplicate column" in str(e).lower() or "already exists" in str(e).lower():
+                    pass  # Column already exists — that's fine
+                else:
+                    raise
+
 
 # ---------------------------------------------------------------------------
 # User model (Flask-Login compatible)
@@ -127,7 +155,7 @@ def init_db():
 
 class User:
     def __init__(self, id, email, name, password_hash,
-                 is_admin, is_active, created_at, last_login_at):
+                 is_admin, is_active, created_at, last_login_at, location=None):
         self.id            = id
         self.email         = email
         self.name          = name
@@ -136,6 +164,7 @@ class User:
         self._is_active    = bool(is_active)
         self.created_at    = created_at
         self.last_login_at = last_login_at
+        self.location      = location or None
 
     # --- Flask-Login interface ---
     @property
@@ -168,6 +197,7 @@ class User:
             is_active     = d["is_active"],
             created_at    = d["created_at"],
             last_login_at = d.get("last_login_at"),
+            location      = d.get("location"),
         )
 
 
@@ -187,16 +217,17 @@ def get_user_by_email(email: str):
         return User.from_row(cur.fetchone())
 
 
-def create_user(email: str, name: str, password: str, is_admin: bool = False):
+def create_user(email: str, name: str, password: str, is_admin: bool = False,
+                location: str = None):
     from werkzeug.security import generate_password_hash
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with _get_cursor() as cur:
         cur.execute(_adapt("""
-            INSERT INTO users (email, name, password_hash, is_admin, is_active, created_at)
-            VALUES (?, ?, ?, ?, 1, ?)
+            INSERT INTO users (email, name, password_hash, is_admin, is_active, created_at, location)
+            VALUES (?, ?, ?, ?, 1, ?, ?)
         """), (email.lower().strip(), name.strip(),
                generate_password_hash(password),
-               1 if is_admin else 0, now))
+               1 if is_admin else 0, now, location or None))
 
 
 def update_last_login(user_id: int):
@@ -210,6 +241,12 @@ def set_user_active(user_id: int, active: bool):
     with _get_cursor() as cur:
         cur.execute(_adapt("UPDATE users SET is_active = ? WHERE id = ?"),
                     (1 if active else 0, user_id))
+
+
+def update_user_location(user_id: int, location):
+    with _get_cursor() as cur:
+        cur.execute(_adapt("UPDATE users SET location = ? WHERE id = ?"),
+                    (location or None, user_id))
 
 
 def list_users():
@@ -284,13 +321,14 @@ def seed_admin_if_needed():
 # Ticket persistence
 # ---------------------------------------------------------------------------
 
-def save_day_tickets(report_date: str, df: pd.DataFrame):
-    """Delete existing tickets for date, then insert the full new set."""
+def save_day_tickets(report_date: str, df: pd.DataFrame, location: str = None):
+    """Delete existing tickets for date (and location if provided), then insert the full new set."""
     init_db()
     uploaded_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     rows = [
         (
             report_date,
+            location or None,
             str(row["Ticket Name"]),
             str(row["Order Source"]),
             int(row["Number of Items"]),
@@ -304,16 +342,23 @@ def save_day_tickets(report_date: str, df: pd.DataFrame):
         for _, row in df.iterrows()
     ]
     with _get_cursor() as cur:
-        cur.execute(_adapt("DELETE FROM tickets WHERE report_date = ?"), (report_date,))
+        if location:
+            cur.execute(
+                _adapt("DELETE FROM tickets WHERE report_date = ? AND location = ?"),
+                (report_date, location)
+            )
+        else:
+            cur.execute(_adapt("DELETE FROM tickets WHERE report_date = ?"), (report_date,))
         cur.executemany(_adapt("""
             INSERT INTO tickets
-               (report_date, ticket_name, order_source, num_items, items,
+               (report_date, location, ticket_name, order_source, num_items, items,
                 duration, time_created, time_completed, device_name, uploaded_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
         """), rows)
 
 
-def get_tickets_df(from_date: str = None, to_date: str = None) -> pd.DataFrame:
+def get_tickets_df(from_date: str = None, to_date: str = None,
+                   location: str = None) -> pd.DataFrame:
     """
     Load tickets from the DB as a DataFrame matching the column structure
     that parse_report() produces, plus a 'report_date' column.
@@ -328,6 +373,9 @@ def get_tickets_df(from_date: str = None, to_date: str = None) -> pd.DataFrame:
     if to_date:
         conditions.append("report_date <= ?")
         params.append(to_date)
+    if location:
+        conditions.append("location = ?")
+        params.append(location)
     if conditions:
         sql += " WHERE " + " AND ".join(conditions)
     sql += " ORDER BY time_created ASC"

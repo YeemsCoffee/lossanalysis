@@ -12,7 +12,7 @@ from .analysis import (
 from .db import (
     save_day_tickets, get_tickets_df, get_date_bounds, get_distinct_dates,
     get_user_by_email, update_last_login,
-    create_user, list_users, set_user_active,
+    create_user, list_users, set_user_active, update_user_location,
     create_reset_token, get_valid_reset_token, mark_token_used,
     update_user_password,
 )
@@ -113,11 +113,20 @@ def reset_password(token):
 # Upload
 # ---------------------------------------------------------------------------
 
+LOCATIONS = ["Gardena", "Koreatown"]
+
+
 @bp.route("/", methods=["GET"])
 @login_required
 def index():
     earliest, latest = get_date_bounds()
-    return render_template("upload.html", has_history=bool(earliest))
+    user_location = current_user.location if hasattr(current_user, "location") else None
+    return render_template(
+        "upload.html",
+        has_history=bool(earliest),
+        user_location=user_location,
+        locations=LOCATIONS,
+    )
 
 
 @bp.route("/analyze", methods=["POST"])
@@ -135,10 +144,43 @@ def analyze():
     try:
         content = f.read()
         df      = parse_report(io.BytesIO(content))
-        iso     = df["Time Created"].dt.date.iloc[0].strftime("%Y-%m-%d")
-        save_day_tickets(iso, df)
-        result  = analyze_df(df)
-        return render_template("results.html", **result, iso_date=iso)
+
+        # Determine location
+        user_location = current_user.location if hasattr(current_user, "location") else None
+        if user_location:
+            # User has a fixed location — use it regardless of form input
+            location = user_location
+        else:
+            location = request.form.get("location", "")
+
+        if location not in LOCATIONS:
+            flash("Please select a valid location.", "error")
+            return redirect(url_for("main.index"))
+
+        # Group by date to handle multi-day CSVs
+        date_groups = list(df.groupby(df["Time Created"].dt.date))
+
+        if len(date_groups) == 1:
+            # Single day — existing behavior: show results
+            date_val, day_df = date_groups[0]
+            iso = date_val.strftime("%Y-%m-%d")
+            save_day_tickets(iso, day_df, location)
+            result = analyze_df(day_df)
+            return render_template("results.html", **result, iso_date=iso)
+        else:
+            # Multiple days — save each group and redirect to history
+            for date_val, day_df in date_groups:
+                iso = date_val.strftime("%Y-%m-%d")
+                save_day_tickets(iso, day_df, location)
+
+            dates = sorted(dv.strftime("%Y-%m-%d") for dv, _ in date_groups)
+            flash(
+                f"{len(date_groups)} days of data uploaded "
+                f"({dates[0]} to {dates[-1]})",
+                "success",
+            )
+            return redirect(url_for("main.history"))
+
     except Exception as e:
         flash(f"Could not parse report: {e}", "error")
         return redirect(url_for("main.index"))
@@ -167,20 +209,23 @@ def day(date):
 @login_required
 def history():
     earliest, latest = get_date_bounds()
+    location = request.args.get("location", "")
 
     if not earliest:
         return render_template("history.html", rows=[], charts=None,
                                from_date=None, to_date=None,
-                               earliest=None, latest=None)
+                               earliest=None, latest=None,
+                               location=location, locations=LOCATIONS)
 
     from_date = request.args.get("from", earliest)
     to_date   = request.args.get("to",   latest)
 
-    df = get_tickets_df(from_date, to_date)
+    df = get_tickets_df(from_date, to_date, location=location if location else None)
     if df.empty:
         return render_template("history.html", rows=[], charts=None,
                                from_date=from_date, to_date=to_date,
-                               earliest=earliest, latest=latest)
+                               earliest=earliest, latest=latest,
+                               location=location, locations=LOCATIONS)
 
     # ---- Per-day summary rows ------------------------------------------------
     rows = []
@@ -328,6 +373,8 @@ def history():
         pct_on_target_avg=avg_on_target,
         worst_day=worst_day,
         best_day=best_day,
+        location=location,
+        locations=LOCATIONS,
     )
 
 
@@ -356,13 +403,14 @@ def admin_create_user():
     name     = request.form.get("name", "").strip()
     password = request.form.get("password", "")
     is_admin = bool(request.form.get("is_admin"))
+    location = request.form.get("location", "") or None
 
     if not email or not name or not password:
         flash("Email, name, and password are all required.", "error")
         return redirect(url_for("main.admin_users"))
 
     try:
-        create_user(email, name, password, is_admin=is_admin)
+        create_user(email, name, password, is_admin=is_admin, location=location)
         flash(f"Account created for {name} ({email}).", "success")
     except Exception as e:
         if "UNIQUE" in str(e).upper() or "unique" in str(e).lower():
@@ -384,4 +432,14 @@ def admin_toggle_user(user_id):
     action = request.form.get("action", "disable")
     set_user_active(user_id, active=(action == "enable"))
     flash(f"Account {'enabled' if action == 'enable' else 'disabled'}.", "success")
+    return redirect(url_for("main.admin_users"))
+
+
+@bp.route("/admin/users/<int:user_id>/location", methods=["POST"])
+@login_required
+def admin_update_location(user_id):
+    _require_admin()
+    location = request.form.get("location", "") or None
+    update_user_location(user_id, location)
+    flash("Location updated.", "success")
     return redirect(url_for("main.admin_users"))

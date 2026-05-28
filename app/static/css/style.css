@@ -558,3 +558,42 @@ tr:hover td { background: var(--cream); }
   outline: none;
   border-color: var(--green);
 }
+
+/* ---- Location tabs (history filter) ---- */
+.location-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+.location-tab {
+  display: inline-block;
+  padding: 7px 18px;
+  border-radius: 20px;
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: none;
+  color: var(--green);
+  border: 2px solid var(--green);
+  background: transparent;
+  transition: all 0.15s;
+}
+.location-tab:hover {
+  background: rgba(43, 70, 40, 0.08);
+}
+.location-tab.active {
+  background: var(--green);
+  color: var(--cream);
+}
+
+/* ---- Location badge (upload page fixed location) ---- */
+.location-badge {
+  display: inline-block;
+  background: var(--cream);
+  color: var(--green);
+  border: 2px solid var(--green);
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-size: 15px;
+  font-weight: 700;
+}

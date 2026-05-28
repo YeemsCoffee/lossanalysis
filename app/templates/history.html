@@ -8,7 +8,17 @@
 {% block content %}
 <div class="results-header">
   <h1>Historical Performance</h1>
-  <div class="date">Kitchen ticket trends over time · target 4:54</div>
+  <div class="date">Kitchen ticket trends over time · target 4:54{% if location %} · {{ location }}{% endif %}</div>
+</div>
+
+<!-- Location filter tabs -->
+<div class="location-tabs">
+  <a href="{{ url_for('main.history', **({'from': from_date, 'to': to_date} if from_date else {})) }}"
+     class="location-tab {% if not location %}active{% endif %}">All</a>
+  {% for loc in locations %}
+    <a href="{{ url_for('main.history', location=loc, **({'from': from_date, 'to': to_date} if from_date else {})) }}"
+       class="location-tab {% if location == loc %}active{% endif %}">{{ loc }}</a>
+  {% endfor %}
 </div>
 
 {% if not rows %}
@@ -24,6 +34,9 @@
 <div class="section" style="padding:16px 24px; margin-bottom:16px;">
   <form method="get" action="{{ url_for('main.history') }}"
         style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+    {% if location %}
+      <input type="hidden" name="location" value="{{ location }}">
+    {% endif %}
     <label style="font-weight:700; color:var(--green); font-size:14px;">Date range</label>
     <input type="date" name="from" value="{{ from_date or '' }}"
            min="{{ earliest or '' }}" max="{{ latest or '' }}"
@@ -39,7 +52,7 @@
                    border-radius:8px; font-weight:700; font-size:14px; cursor:pointer;
                    font-family:inherit;">Apply</button>
     {% if from_date != earliest or to_date != latest %}
-      <a href="{{ url_for('main.history') }}"
+      <a href="{{ url_for('main.history', **({'location': location} if location else {})) }}"
          style="font-size:14px; color:var(--gray); text-decoration:none;">Reset</a>
     {% endif %}
   </form>

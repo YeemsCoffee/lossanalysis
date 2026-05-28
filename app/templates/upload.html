@@ -7,6 +7,25 @@
 </div>
 
 <form class="upload-card" method="post" action="{{ url_for('main.analyze') }}" enctype="multipart/form-data" id="upload-form">
+
+  <!-- Location selector -->
+  <div class="field-group" style="margin-bottom:24px;">
+    <label class="field-label">Location</label>
+    {% if user_location %}
+      <!-- Single assigned location — locked -->
+      <div class="location-badge">{{ user_location }}</div>
+      <input type="hidden" name="location" value="{{ user_location }}">
+    {% else %}
+      <!-- Admin or multi-location — choose -->
+      <select class="field-input" name="location" id="location-select" required>
+        <option value="">Select location…</option>
+        {% for loc in locations %}
+          <option value="{{ loc }}">{{ loc }}</option>
+        {% endfor %}
+      </select>
+    {% endif %}
+  </div>
+
   <label class="dropzone" id="dropzone" for="file-input">
     <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -38,14 +57,22 @@
   const filenameEl = document.getElementById('filename');
   const submitBtn = document.getElementById('submit-btn');
   const form = document.getElementById('upload-form');
+  const locationSelect = document.getElementById('location-select');
+
+  function checkReady() {
+    const fileOk = !!input.files.length;
+    const locOk  = !locationSelect || locationSelect.value !== '';
+    submitBtn.disabled = !(fileOk && locOk);
+  }
 
   function setFile(file) {
     if (!file) return;
     filenameEl.textContent = file.name;
-    submitBtn.disabled = false;
+    checkReady();
   }
 
   input.addEventListener('change', e => setFile(e.target.files[0]));
+  if (locationSelect) locationSelect.addEventListener('change', checkReady);
 
   ['dragenter', 'dragover'].forEach(ev =>
     dropzone.addEventListener(ev, e => { e.preventDefault(); dropzone.classList.add('dragover'); }));
