@@ -25,6 +25,7 @@
           <a href="{{ url_for('main.history') }}" class="nav-link">History</a>
           {% if current_user.is_admin %}
             <a href="{{ url_for('main.admin_users') }}" class="nav-link">Manage</a>
+            <a href="{{ url_for('main.admin_settings') }}" class="nav-link">Settings</a>
           {% endif %}
         </nav>
         <div class="header-user">

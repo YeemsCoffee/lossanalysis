@@ -164,12 +164,13 @@ def analyze():
         # Group by date to handle multi-day CSVs
         date_groups = list(df.groupby(df["Time Created"].dt.date))
 
+        targets = get_targets()
         if len(date_groups) == 1:
             # Single day — existing behavior: show results
             date_val, day_df = date_groups[0]
             iso = date_val.strftime("%Y-%m-%d")
             save_day_tickets(iso, day_df, location)
-            result = analyze_df(day_df)
+            result = analyze_df(day_df, target_seconds=targets["target_seconds"], target_pct=targets["target_pct"])
             return render_template("results.html", **result, iso_date=iso)
         else:
             # Multiple days — save each group and redirect to history
@@ -197,11 +198,12 @@ def analyze():
 @bp.route("/day/<date>")
 @login_required
 def day(date):
-    df = get_tickets_df(from_date=date, to_date=date)
+    targets = get_targets()
+    df = get_tickets_df(from_date=date, to_date=date, target_seconds=targets["target_seconds"])
     if df.empty:
         flash(f"No data found for {date}.", "error")
         return redirect(url_for("main.history"))
-    result = analyze_df(df)
+    result = analyze_df(df, target_seconds=targets["target_seconds"], target_pct=targets["target_pct"])
     return render_template("results.html", **result, iso_date=date, from_history=True)
 
 
@@ -214,22 +216,30 @@ def day(date):
 def history():
     earliest, latest = get_date_bounds()
     location = request.args.get("location", "")
+    targets = get_targets()
+    target_fmt = fmt_time(targets["target_seconds"])
+    target_pct = targets["target_pct"]
 
     if not earliest:
         return render_template("history.html", rows=[], charts=None,
                                from_date=None, to_date=None,
                                earliest=None, latest=None,
-                               location=location, locations=LOCATIONS)
+                               location=location, locations=LOCATIONS,
+                               target_fmt=target_fmt, target_pct=target_pct,
+                               targets=targets)
 
     from_date = request.args.get("from", earliest)
     to_date   = request.args.get("to",   latest)
 
-    df = get_tickets_df(from_date, to_date, location=location if location else None)
+    df = get_tickets_df(from_date, to_date, location=location if location else None,
+                        target_seconds=targets["target_seconds"])
     if df.empty:
         return render_template("history.html", rows=[], charts=None,
                                from_date=from_date, to_date=to_date,
                                earliest=earliest, latest=latest,
-                               location=location, locations=LOCATIONS)
+                               location=location, locations=LOCATIONS,
+                               target_fmt=target_fmt, target_pct=target_pct,
+                               targets=targets)
 
     # ---- Per-day summary rows ------------------------------------------------
     rows = []
@@ -296,8 +306,8 @@ def history():
          "fill": "tozeroy", "fillcolor": "rgba(188,215,222,0.2)",
          "hovertemplate": "%{x}<br>Avg: %{y}s<extra></extra>"},
         {"x": [dates_asc[0], dates_asc[-1]],
-         "y": [TARGET_SECONDS, TARGET_SECONDS],
-         "name": "Target (294s)", "type": "scatter", "mode": "lines",
+         "y": [targets["target_seconds"], targets["target_seconds"]],
+         "name": f"Target ({target_fmt})", "type": "scatter", "mode": "lines",
          "line": {"color": "#d97706", "width": 2, "dash": "dash"},
          "hoverinfo": "skip"},
     ]
@@ -379,6 +389,9 @@ def history():
         best_day=best_day,
         location=location,
         locations=LOCATIONS,
+        target_fmt=target_fmt,
+        target_pct=target_pct,
+        targets=targets,
     )
 
 
@@ -464,3 +477,25 @@ def admin_assign_location():
     scope = "all tickets" if overwrite else "unassigned tickets"
     flash(f"{count} {scope} assigned to {location}.", "success")
     return redirect(url_for("main.admin_users"))
+
+
+@bp.route("/admin/settings", methods=["GET", "POST"])
+@login_required
+def admin_settings():
+    _require_admin()
+    if request.method == "POST":
+        minutes = int(request.form.get("minutes", 4))
+        seconds = int(request.form.get("seconds", 54))
+        target_pct = int(request.form.get("target_pct", 85))
+        target_seconds = minutes * 60 + seconds
+        set_setting("target_seconds", str(target_seconds))
+        set_setting("target_pct", str(target_pct))
+        flash(f"Target updated to {minutes}m {seconds}s at {target_pct}% goal.", "success")
+        return redirect(url_for("main.admin_settings"))
+    targets = get_targets()
+    ts = targets["target_seconds"]
+    return render_template("admin_settings.html",
+        target_minutes=ts // 60,
+        target_seconds_rem=ts % 60,
+        target_pct=targets["target_pct"],
+    )

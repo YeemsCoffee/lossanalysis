@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Settings · Yeems Coffee{% endblock %}
+{% block content %}
+<div class="results-header">
+  <h1>Settings</h1>
+  <div class="date">Configure performance targets for all locations.</div>
+</div>
+<div class="section" style="max-width:480px;">
+  <h2>🎯 Performance Targets</h2>
+  <div class="section-sub">These apply to all locations and all managers.</div>
+  <form method="post">
+    <div class="field-group">
+      <label class="field-label">Ticket Target Time</label>
+      <div style="display:flex; gap:12px; align-items:center;">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <input class="field-input" type="number" name="minutes" min="0" max="30"
+                 value="{{ target_minutes }}" style="width:80px; text-align:center;">
+          <span style="color:var(--gray); font-size:14px;">min</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <input class="field-input" type="number" name="seconds" min="0" max="59"
+                 value="{{ target_seconds_rem }}" style="width:80px; text-align:center;">
+          <span style="color:var(--gray); font-size:14px;">sec</span>
+        </div>
+      </div>
+    </div>
+    <div class="field-group">
+      <label class="field-label">On-Time Goal (%)</label>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <input class="field-input" type="number" name="target_pct" min="1" max="100"
+               value="{{ target_pct }}" style="width:80px; text-align:center;">
+        <span style="color:var(--gray); font-size:14px;">% of tickets must be on time</span>
+      </div>
+    </div>
+    <button class="btn" type="submit" style="width:auto; display:inline-block; padding:12px 32px;">
+      Save Settings
+    </button>
+  </form>
+</div>
+{% endblock %}

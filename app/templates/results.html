@@ -27,7 +27,7 @@
     <div class="label">Total Tickets</div>
     <div class="value">{{ total_tickets }}</div>
   </div>
-  <div class="stat-card {% if pct_on_target < 70 %}danger{% elif pct_on_target < 85 %}amber{% endif %}">
+  <div class="stat-card {% if pct_on_target < 70 %}danger{% elif pct_on_target < target_pct %}amber{% endif %}">
     <div class="label">On Target</div>
     <div class="value">{{ pct_on_target }}%</div>
     <div class="sub">{{ on_time_count }} tickets</div>
@@ -121,7 +121,7 @@
     <div class="section-sub">On-target rate per channel.</div>
     <div class="source-grid">
       {% for s in sources %}
-        <div class="source-card {% if s.pct_on_target < 70 %}bad{% elif s.pct_on_target < 85 %}warn{% endif %}">
+        <div class="source-card {% if s.pct_on_target < 70 %}bad{% elif s.pct_on_target < target_pct %}warn{% endif %}">
           <div class="src-name">{{ s.source }}</div>
           <div class="src-rate">{{ s.pct_on_target }}%</div>
           <div class="src-detail">{{ s.on_time }} on time / {{ s.total }} total · avg {{ s.avg_fmt }}</div>

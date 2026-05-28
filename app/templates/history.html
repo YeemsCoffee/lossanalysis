@@ -8,7 +8,7 @@
 {% block content %}
 <div class="results-header">
   <h1>Historical Performance</h1>
-  <div class="date">Kitchen ticket trends over time · target 4:54{% if location %} · {{ location }}{% endif %}</div>
+  <div class="date">Kitchen ticket trends over time · target {{ target_fmt }}{% if location %} · {{ location }}{% endif %}</div>
 </div>
 
 <!-- Location filter tabs -->
@@ -93,7 +93,7 @@
 <!-- On-target % trend -->
 <div class="section">
   <h2>📈 On-Target Rate Over Time</h2>
-  <div class="section-sub">Daily % of tickets completed within the 4:54 target. Dotted line = 85% goal.</div>
+  <div class="section-sub">Daily % of tickets completed within the {{ target_fmt }} target. Dotted line = {{ target_pct }}% goal.</div>
   <div id="trend-chart" class="chart"></div>
 </div>
 
@@ -106,7 +106,7 @@
   </div>
   <div class="section">
     <h2>⏱ Avg Ticket Time</h2>
-    <div class="section-sub">Daily average vs the 4:54 target (294 sec).</div>
+    <div class="section-sub">Daily average vs the {{ target_fmt }} target ({{ targets.target_seconds }} sec).</div>
     <div id="avg-chart" class="chart short"></div>
   </div>
 </div>
@@ -184,7 +184,7 @@
     yaxis: { title: 'On-Target %', range: [0, 100], gridcolor: '#e5e7eb' },
     xaxis: { showgrid: false },
     shapes: [{
-      type: 'line', x0: 0, x1: 1, xref: 'paper', y0: 85, y1: 85,
+      type: 'line', x0: 0, x1: 1, xref: 'paper', y0: {{ target_pct }}, y1: {{ target_pct }},
       line: { color: '#d97706', width: 1.5, dash: 'dot' }
     }],
   }), cfg);

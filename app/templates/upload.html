@@ -38,7 +38,7 @@
   </label>
   <button class="btn" type="submit" id="submit-btn" disabled>Analyze Report</button>
   <div class="target-note">
-    Current target: <strong>4 minutes 54 seconds</strong> per ticket
+    Current target: <strong>{{ target_fmt }}</strong> · On-time goal: <strong>{{ target_pct }}%</strong>
   </div>
   {% if has_history %}
   <div class="target-note" style="margin-top:12px;">
