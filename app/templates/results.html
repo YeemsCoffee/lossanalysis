@@ -72,7 +72,7 @@
     {% for c in clusters %}
       <div class="cluster">
         <div class="cluster-header">
-          <div class="cluster-title">{{ c.ticket_count }} tickets in a row · {{ c.start_time }} – {{ c.end_time }}</div>
+          <div class="cluster-title">{{ c.ticket_count }} tickets in a row <span style="font-weight:400; color:#7f1d1d; font-size:14px;">({{ c.pct_of_day }}% of today's tickets)</span> · {{ c.start_time }} – {{ c.end_time }}</div>
           <div class="cluster-meta">
             <span><strong>Avg:</strong> {{ c.avg_fmt }}</span>
             <span><strong>Max:</strong> {{ c.max_fmt }}</span>

@@ -135,6 +135,12 @@ def _build_cluster(rows):
     }
 
 
+def _clusters_with_pct(clusters, total_tickets):
+    for c in clusters:
+        c["pct_of_day"] = round(c["ticket_count"] / total_tickets * 100, 1) if total_tickets else 0
+    return clusters
+
+
 def hourly_summary(df):
     rows = []
     for hour, grp in df.groupby("hour"):
@@ -327,7 +333,7 @@ def analyze_df(df: pd.DataFrame) -> dict:
         "longest_ticket_items":  str(max_row["Items in Ticket"]),
         "longest_ticket_time":   fmt_clock(max_row["Time Created"]),
         "longest_ticket_source": str(max_row["source"]),
-        "clusters":              find_clusters(df),
+        "clusters":              _clusters_with_pct(find_clusters(df), len(df)),
         "hourly":                hourly,
         "sources":               sources,
         "top_offenders":         top_offenders(df, n=15),
