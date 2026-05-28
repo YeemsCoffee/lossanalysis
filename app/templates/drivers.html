@@ -1,0 +1,198 @@
+{% extends "base.html" %}
+{% block title %}Loss Drivers · Yeems Coffee{% endblock %}
+
+{% block head_extra %}
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="results-header">
+  <h1>Loss Drivers</h1>
+  <div class="date">What's actually driving over-target tickets · target {{ target_fmt }} · {{ target_pct }}% goal{% if location %} · {{ location }}{% endif %}</div>
+</div>
+
+<!-- Location filter tabs -->
+<div class="location-tabs">
+  <a href="{{ url_for('main.drivers', **({'from': from_date, 'to': to_date} if from_date else {})) }}"
+     class="location-tab {% if not location %}active{% endif %}">All</a>
+  {% for loc in locations %}
+    <a href="{{ url_for('main.drivers', location=loc, **({'from': from_date, 'to': to_date} if from_date else {})) }}"
+       class="location-tab {% if location == loc %}active{% endif %}">{{ loc }}</a>
+  {% endfor %}
+</div>
+
+{% if not drivers %}
+  <div class="section" style="text-align:center; padding:60px; color:var(--gray);">
+    <div style="font-size:48px; margin-bottom:16px;">🔍</div>
+    <div style="font-size:18px; font-weight:700; color:var(--green);">No data to analyze yet</div>
+    <div style="margin-top:8px;">Upload a few days of reports to surface loss-driver patterns.</div>
+    <a href="{{ url_for('main.index') }}" class="btn" style="width:auto; display:inline-block; margin-top:24px; padding:12px 28px;">Upload a Report</a>
+  </div>
+{% else %}
+
+<!-- Date range picker -->
+<div class="section" style="padding:16px 24px; margin-bottom:16px;">
+  <form method="get" action="{{ url_for('main.drivers') }}"
+        style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+    {% if location %}<input type="hidden" name="location" value="{{ location }}">{% endif %}
+    <label style="font-weight:700; color:var(--green); font-size:14px;">Date range</label>
+    <input type="date" name="from" value="{{ from_date or '' }}"
+           min="{{ earliest or '' }}" max="{{ latest or '' }}"
+           style="padding:7px 10px; border:2px solid var(--gray-light); border-radius:8px; font-family:inherit; font-size:14px;">
+    <span style="color:var(--gray);">to</span>
+    <input type="date" name="to" value="{{ to_date or '' }}"
+           min="{{ earliest or '' }}" max="{{ latest or '' }}"
+           style="padding:7px 10px; border:2px solid var(--gray-light); border-radius:8px; font-family:inherit; font-size:14px;">
+    <button type="submit"
+            style="padding:7px 18px; background:var(--green); color:var(--cream); border:none; border-radius:8px; font-weight:700; font-size:14px; cursor:pointer; font-family:inherit;">Apply</button>
+    <span style="color:var(--gray); font-size:13px; margin-left:auto;">{{ "{:,}".format(drivers.total_tickets) }} tickets analyzed</span>
+  </form>
+</div>
+
+<!-- 1. WIP / load threshold -->
+<div class="section">
+  <h2>🏗 Kitchen Load Threshold (WIP)</h2>
+  <div class="section-sub">
+    For every ticket we count how many other tickets were already in the queue when it came in. As the queue (work-in-process) grows, the kitchen hits a ceiling. Baseline over-target rate is <strong>{{ drivers.wip.baseline_over }}%</strong>.
+  </div>
+  {% if drivers.wip.knee %}
+    <div class="driver-callout danger">
+      🚦 <strong>Capacity ceiling at {{ drivers.wip.knee.wip }} tickets in the queue.</strong>
+      Once {{ drivers.wip.knee.wip }}+ tickets are open at once, over-target rate climbs to
+      <strong>{{ drivers.wip.knee.over_pct }}%</strong> — above your {{ drivers.wip.over_goal }}% acceptable line.
+      This is the number to watch for adding a hand on the line.
+    </div>
+  {% else %}
+    <div class="driver-callout ok">
+      ✅ Queue depth isn't pushing you past your goal in this range — load is being handled well.
+    </div>
+  {% endif %}
+  <div id="wip-chart" class="chart short"></div>
+</div>
+
+<!-- 2. Cascade / domino -->
+<div class="section">
+  <h2>🁢 Cascade Effect (the domino)</h2>
+  <div class="section-sub">
+    Does falling behind compound? We compare the chance the <em>next</em> ticket goes over depending on whether the current one did.
+  </div>
+  <div class="driver-callout {% if drivers.cascade.lift and drivers.cascade.lift >= 1.5 %}danger{% else %}ok{% endif %}">
+    {% if drivers.cascade.lift and drivers.cascade.lift >= 1.5 %}
+      🌊 <strong>Backups snowball.</strong> After an over-target ticket, the next one goes over
+      <strong>{{ drivers.cascade.p_after_over }}%</strong> of the time — vs just
+      <strong>{{ drivers.cascade.p_after_ok }}%</strong> after an on-time ticket
+      ({{ drivers.cascade.lift }}× more likely).
+      {% if drivers.cascade.avg_recovery %}Once a streak starts it takes about
+      <strong>{{ drivers.cascade.avg_recovery }} min</strong> to recover.{% endif %}
+      Catching the <em>first</em> slow ticket early stops the chain.
+    {% else %}
+      ✅ Over-target tickets aren't strongly chaining together — slow tickets look more like isolated events than backups.
+    {% endif %}
+  </div>
+  <div class="stat-grid" style="margin-bottom:0;">
+    <div class="stat-card"><div class="label">Avg Streak Length</div><div class="value">{{ drivers.cascade.avg_streak }}</div><div class="sub">consecutive over-target</div></div>
+    <div class="stat-card amber"><div class="label">Longest Streak</div><div class="value">{{ drivers.cascade.max_streak }}</div><div class="sub">tickets in a row</div></div>
+    <div class="stat-card"><div class="label">Backups Counted</div><div class="value">{{ drivers.cascade.streak_count }}</div><div class="sub">in this range</div></div>
+    {% if drivers.cascade.avg_recovery %}
+    <div class="stat-card danger"><div class="label">Avg Recovery</div><div class="value">{{ drivers.cascade.avg_recovery }}</div><div class="sub">minutes to clear</div></div>
+    {% endif %}
+  </div>
+  <div id="cascade-chart" class="chart short"></div>
+</div>
+
+<!-- 3. Item association -->
+<div class="section">
+  <h2>🧾 Problem Items (association lift)</h2>
+  <div class="section-sub">
+    Which menu items show up in over-target tickets more than their fair share. <strong>Lift</strong> is how many times more likely a ticket goes over when it contains the item. Baseline over-target rate: <strong>{{ drivers.items.baseline }}%</strong>. Only items appearing in {{ drivers.items.min_occurrences }}+ tickets shown.
+  </div>
+  {% if drivers.items.has_data %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Item</th><th>Appears In</th><th>Over-Target</th><th>Over %</th><th>Lift</th></tr>
+        </thead>
+        <tbody>
+          {% for it in drivers.items.items %}
+            <tr>
+              <td><strong style="color:var(--green);">{{ it.name }}</strong></td>
+              <td>{{ it.total }} tickets</td>
+              <td style="color:var(--red); font-weight:700;">{{ it.over }}</td>
+              <td>
+                <span class="duration-cell {% if it.over_pct >= 100 - target_pct %}over{% else %}ok{% endif %}">{{ it.over_pct }}%</span>
+              </td>
+              <td>
+                <span style="font-weight:800; color:{% if it.lift >= 1.5 %}var(--red){% elif it.lift >= 1.1 %}var(--amber){% else %}var(--gray){% endif %};">{{ it.lift }}×</span>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="driver-callout ok">Not enough repeated items in this range to draw a reliable association. Widen the date range to see item patterns.</div>
+  {% endif %}
+</div>
+
+<!-- 4. Order size -->
+<div class="section">
+  <h2>📦 Order-Size Threshold</h2>
+  <div class="section-sub">Over-target rate by number of items on the ticket. Bigger orders take longer — this shows where the jump happens.</div>
+  {% if drivers.size.knee %}
+    <div class="driver-callout danger">
+      📈 <strong>Big-order break point at {{ drivers.size.knee.size }} items.</strong>
+      Tickets with {{ drivers.size.knee.size }}+ items miss target <strong>{{ drivers.size.knee.over_pct }}%</strong> of the time.
+      Consider firing/sequencing these differently or flagging them at the POS.
+    </div>
+  {% else %}
+    <div class="driver-callout ok">✅ Order size isn't a major driver here — large tickets are keeping pace.</div>
+  {% endif %}
+  <div id="size-chart" class="chart short"></div>
+  <div class="table-wrap" style="margin-top:16px;">
+    <table>
+      <thead><tr><th>Items</th><th>Tickets</th><th>Over %</th><th>Avg Time</th></tr></thead>
+      <tbody>
+        {% for r in drivers.size.rows %}
+          <tr>
+            <td><strong>{{ r.label }}</strong></td>
+            <td>{{ r.count }}</td>
+            <td><span class="duration-cell {% if r.over_pct >= 100 - target_pct %}over{% else %}ok{% endif %}">{{ r.over_pct }}%</span></td>
+            <td class="duration-cell {% if r.over_pct >= 100 - target_pct %}over{% else %}ok{% endif %}">{{ r.avg_fmt }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if charts %}
+<script>
+  const cfg = { responsive: true, displayModeBar: false };
+  const baseLayout = (extra = {}) => Object.assign({
+    margin: { l: 55, r: 20, t: 10, b: 50 },
+    paper_bgcolor: '#fff', plot_bgcolor: '#fff',
+    font: { family: 'Nunito, sans-serif', color: '#1f2937' },
+    showlegend: false,
+  }, extra);
+
+  Plotly.newPlot('wip-chart', {{ charts.wip | safe }}, baseLayout({
+    xaxis: { title: 'Tickets in queue (WIP)', showgrid: false },
+    yaxis: { title: 'Over-Target %', range: [0, 100], gridcolor: '#e5e7eb' },
+  }), cfg);
+
+  Plotly.newPlot('cascade-chart', {{ charts.cascade | safe }}, baseLayout({
+    xaxis: { showgrid: false },
+    yaxis: { title: 'Next ticket over %', range: [0, 100], gridcolor: '#e5e7eb' },
+  }), cfg);
+
+  Plotly.newPlot('size-chart', {{ charts.size | safe }}, baseLayout({
+    xaxis: { title: 'Items on ticket', showgrid: false },
+    yaxis: { title: 'Over-Target %', range: [0, 100], gridcolor: '#e5e7eb' },
+  }), cfg);
+</script>
+{% endif %}
+{% endblock %}

@@ -23,6 +23,7 @@
         <nav class="header-nav">
           <a href="{{ url_for('main.index') }}" class="nav-link">Upload</a>
           <a href="{{ url_for('main.history') }}" class="nav-link">History</a>
+          <a href="{{ url_for('main.drivers') }}" class="nav-link">Loss Drivers</a>
           {% if current_user.is_admin %}
             <a href="{{ url_for('main.admin_users') }}" class="nav-link">Manage</a>
             <a href="{{ url_for('main.admin_settings') }}" class="nav-link">Settings</a>

@@ -395,6 +395,62 @@ def history():
 
 
 # ---------------------------------------------------------------------------
+# Loss Drivers (correlation / root-cause analysis)
+# ---------------------------------------------------------------------------
+
+@bp.route("/drivers")
+@login_required
+def drivers():
+    from .analysis_drivers import analyze_loss_drivers
+
+    earliest, latest = get_date_bounds()
+    location = request.args.get("location", "")
+    targets  = get_targets()
+    target_fmt = fmt_time(targets["target_seconds"])
+    target_pct = targets["target_pct"]
+
+    if not earliest:
+        return render_template("drivers.html", drivers=None,
+                               from_date=None, to_date=None,
+                               earliest=None, latest=None,
+                               location=location, locations=LOCATIONS,
+                               target_fmt=target_fmt, target_pct=target_pct)
+
+    from_date = request.args.get("from", earliest)
+    to_date   = request.args.get("to",   latest)
+
+    df = get_tickets_df(from_date, to_date, location=location if location else None,
+                        target_seconds=targets["target_seconds"])
+    if df.empty:
+        return render_template("drivers.html", drivers=None,
+                               from_date=from_date, to_date=to_date,
+                               earliest=earliest, latest=latest,
+                               location=location, locations=LOCATIONS,
+                               target_fmt=target_fmt, target_pct=target_pct)
+
+    result = analyze_loss_drivers(df, targets["target_seconds"], target_pct)
+    charts = {
+        "wip":     json.dumps(result["wip"]["chart"]),
+        "cascade": json.dumps(result["cascade"]["chart"]),
+        "size":    json.dumps(result["size"]["chart"]),
+    }
+
+    return render_template(
+        "drivers.html",
+        drivers=result,
+        charts=charts,
+        from_date=from_date,
+        to_date=to_date,
+        earliest=earliest,
+        latest=latest,
+        location=location,
+        locations=LOCATIONS,
+        target_fmt=target_fmt,
+        target_pct=target_pct,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Admin — Manage Managers
 # ---------------------------------------------------------------------------
 

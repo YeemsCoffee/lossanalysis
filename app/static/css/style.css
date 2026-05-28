@@ -597,3 +597,23 @@ tr:hover td { background: var(--cream); }
   font-size: 15px;
   font-weight: 700;
 }
+
+/* ---- Loss-driver callouts ---- */
+.driver-callout {
+  border-radius: 10px;
+  padding: 16px 18px;
+  margin: 4px 0 20px;
+  font-size: 15px;
+  line-height: 1.5;
+}
+.driver-callout.danger {
+  background: var(--red-light);
+  color: #7f1d1d;
+  border-left: 4px solid var(--red);
+}
+.driver-callout.ok {
+  background: #f0fdf4;
+  color: #166534;
+  border-left: 4px solid var(--green);
+}
+.driver-callout strong { color: inherit; }
