@@ -7,7 +7,6 @@ from werkzeug.security import check_password_hash
 from .analysis import (
     parse_report, analyze_df,
     fmt_time, fmt_hour, source_summary,
-    TARGET_SECONDS,
 )
 from .db import (
     save_day_tickets, get_tickets_df, get_date_bounds, get_distinct_dates,
