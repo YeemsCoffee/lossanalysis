@@ -14,7 +14,7 @@ from .db import (
     get_user_by_email, update_last_login,
     create_user, list_users, set_user_active, update_user_location,
     create_reset_token, get_valid_reset_token, mark_token_used,
-    update_user_password,
+    update_user_password, bulk_assign_location,
 )
 import io
 import json
@@ -442,4 +442,21 @@ def admin_update_location(user_id):
     location = request.form.get("location", "") or None
     update_user_location(user_id, location)
     flash("Location updated.", "success")
+    return redirect(url_for("main.admin_users"))
+
+
+@bp.route("/admin/data/assign-location", methods=["POST"])
+@login_required
+def admin_assign_location():
+    _require_admin()
+    location  = request.form.get("location", "")
+    overwrite = request.form.get("overwrite") == "1"
+
+    if location not in LOCATIONS:
+        flash("Invalid location.", "error")
+        return redirect(url_for("main.admin_users"))
+
+    count = bulk_assign_location(location, overwrite=overwrite)
+    scope = "all tickets" if overwrite else "unassigned tickets"
+    flash(f"{count} {scope} assigned to {location}.", "success")
     return redirect(url_for("main.admin_users"))

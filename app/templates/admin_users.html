@@ -7,6 +7,31 @@
   <div class="date">Create accounts and control access for your team.</div>
 </div>
 
+<!-- Bulk location assignment -->
+<div class="section" style="border-left: 4px solid var(--amber);">
+  <h2>📍 Assign Historical Data to a Location</h2>
+  <div class="section-sub">Use this to tag existing ticket data that was uploaded before location support was added.</div>
+  <form method="post" action="{{ url_for('main.admin_assign_location') }}"
+        style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+    <select class="field-input" name="location" required
+            style="width:auto; padding:9px 14px;">
+      <option value="">Select location…</option>
+      <option value="Gardena">Gardena</option>
+      <option value="Koreatown">Koreatown</option>
+    </select>
+    <label style="display:flex; align-items:center; gap:8px; font-size:14px; color:var(--gray); cursor:pointer;">
+      <input type="checkbox" name="overwrite" value="1"
+             style="width:15px; height:15px; accent-color:var(--amber);">
+      Overwrite already-assigned tickets too
+    </label>
+    <button type="submit" class="btn"
+            style="width:auto; display:inline-block; padding:10px 24px; background:var(--amber);"
+            onclick="return confirm('Assign all matching tickets to this location?')">
+      Assign
+    </button>
+  </form>
+</div>
+
 <!-- Create new user form -->
 <div class="section">
   <h2>➕ Add Manager</h2>

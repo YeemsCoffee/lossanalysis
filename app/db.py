@@ -279,6 +279,20 @@ def create_reset_token(user_id: int) -> str:
     return token
 
 
+def bulk_assign_location(location: str, overwrite: bool = False):
+    """Assign a location to all tickets that have no location set.
+    If overwrite=True, reassigns ALL tickets regardless of current location."""
+    with _get_cursor() as cur:
+        if overwrite:
+            cur.execute(_adapt("UPDATE tickets SET location = ?"), (location,))
+        else:
+            cur.execute(
+                _adapt("UPDATE tickets SET location = ? WHERE location IS NULL OR location = ''"),
+                (location,)
+            )
+        return cur.rowcount
+
+
 def get_valid_reset_token(token: str):
     """Return the token row if it exists, is unused, and hasn't expired."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
