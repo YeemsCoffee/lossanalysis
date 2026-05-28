@@ -122,6 +122,21 @@ def init_db():
             )
         """)
 
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
+
+        # Seed default settings
+        if IS_POSTGRES:
+            cur.execute("INSERT INTO settings (key, value) VALUES ('target_seconds', '294') ON CONFLICT DO NOTHING")
+            cur.execute("INSERT INTO settings (key, value) VALUES ('target_pct', '85') ON CONFLICT DO NOTHING")
+        else:
+            cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('target_seconds', '294')")
+            cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('target_pct', '85')")
+
     # Add location column to existing tables if it doesn't already exist
     _migrate_add_location_columns()
 
@@ -147,6 +162,37 @@ def _migrate_add_location_columns():
                     pass  # Column already exists — that's fine
                 else:
                     raise
+
+
+# ---------------------------------------------------------------------------
+# Settings helpers
+# ---------------------------------------------------------------------------
+
+def get_setting(key: str, default: str = None) -> str:
+    """Get a single setting value."""
+    with _get_cursor() as cur:
+        cur.execute(_adapt("SELECT value FROM settings WHERE key = ?"), (key,))
+        row = cur.fetchone()
+    return dict(row)["value"] if row else default
+
+
+def set_setting(key: str, value: str):
+    """Upsert a setting value."""
+    if IS_POSTGRES:
+        sql = "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
+        with _get_cursor() as cur:
+            cur.execute(sql, (key, value))
+    else:
+        with _get_cursor() as cur:
+            cur.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+
+
+def get_targets() -> dict:
+    """Return current target_seconds and target_pct from settings."""
+    return {
+        "target_seconds": int(get_setting("target_seconds", "294")),
+        "target_pct":     int(get_setting("target_pct",     "85")),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -372,7 +418,7 @@ def save_day_tickets(report_date: str, df: pd.DataFrame, location: str = None):
 
 
 def get_tickets_df(from_date: str = None, to_date: str = None,
-                   location: str = None) -> pd.DataFrame:
+                   location: str = None, target_seconds: int = 294) -> pd.DataFrame:
     """
     Load tickets from the DB as a DataFrame matching the column structure
     that parse_report() produces, plus a 'report_date' column.
@@ -412,8 +458,8 @@ def get_tickets_df(from_date: str = None, to_date: str = None,
     df["Time Created"]   = pd.to_datetime(df["time_created"])
     df["Time Completed"] = pd.to_datetime(df["time_completed"])
     df["duration"]       = df["duration"].astype(float)
-    df["over_target"]    = df["duration"] > TARGET_SECONDS
-    df["seconds_over"]   = (df["duration"] - TARGET_SECONDS).clip(lower=0)
+    df["over_target"]    = df["duration"] > target_seconds
+    df["seconds_over"]   = (df["duration"] - target_seconds).clip(lower=0)
     df["hour"]           = df["Time Created"].dt.hour
     df["source"]         = df["Order Source"].str.strip()
 

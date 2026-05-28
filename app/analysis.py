@@ -62,7 +62,7 @@ def extract_iso_date(df: pd.DataFrame) -> str:
 # Analysis building blocks
 # ---------------------------------------------------------------------------
 
-def find_clusters(df, min_size=MIN_CLUSTER_SIZE):
+def find_clusters(df, min_size=MIN_CLUSTER_SIZE, target_seconds=TARGET_SECONDS):
     """
     Find consecutive over-target runs per day, then merge runs within
     CLUSTER_MERGE_GAP_MINUTES of each other.
@@ -99,13 +99,13 @@ def find_clusters(df, min_size=MIN_CLUSTER_SIZE):
 
         for run in merged:
             if len(run) >= min_size:
-                all_clusters.append(_build_cluster(run))
+                all_clusters.append(_build_cluster(run, target_seconds=target_seconds))
 
     all_clusters.sort(key=lambda c: (-c["ticket_count"], -c["avg_seconds"]))
     return all_clusters
 
 
-def _build_cluster(rows):
+def _build_cluster(rows, target_seconds=TARGET_SECONDS):
     durations = [r["duration"] for r in rows]
     return {
         "ticket_count":    len(rows),
@@ -119,14 +119,14 @@ def _build_cluster(rows):
         "avg_fmt":         fmt_time(sum(durations) / len(durations)),
         "max_seconds":     round(max(durations)),
         "max_fmt":         fmt_time(max(durations)),
-        "total_seconds_over": round(sum(max(0, d - TARGET_SECONDS) for d in durations)),
+        "total_seconds_over": round(sum(max(0, d - target_seconds) for d in durations)),
         "tickets": [
             {
                 "name":         str(r["Ticket Name"]),
                 "time":         fmt_clock(r["Time Created"]),
                 "duration":     int(r["duration"]),
                 "duration_fmt": fmt_time(r["duration"]),
-                "over_by":      fmt_time(r["duration"] - TARGET_SECONDS),
+                "over_by":      fmt_time(r["duration"] - target_seconds),
                 "items":        str(r["Items in Ticket"]),
                 "source":       str(r["Order Source"]),
             }
@@ -178,7 +178,7 @@ def source_summary(df):
     return sorted(rows, key=lambda x: -x["total"])
 
 
-def top_offenders(df, n=15):
+def top_offenders(df, n=15, target_seconds=TARGET_SECONDS):
     out = []
     for _, row in df.nlargest(n, "duration").iterrows():
         out.append({
@@ -188,14 +188,14 @@ def top_offenders(df, n=15):
             "date":         row["Time Created"].strftime("%Y-%m-%d"),
             "duration":     int(row["duration"]),
             "duration_fmt": fmt_time(row["duration"]),
-            "over_by":      fmt_time(row["duration"] - TARGET_SECONDS),
+            "over_by":      fmt_time(row["duration"] - target_seconds),
             "items":        str(row["Items in Ticket"]),
             "item_count":   int(row["Number of Items"]),
         })
     return out
 
 
-def all_over_target(df):
+def all_over_target(df, target_seconds=TARGET_SECONDS):
     out = []
     for _, row in df[df["over_target"]].sort_values("duration", ascending=False).iterrows():
         out.append({
@@ -204,8 +204,8 @@ def all_over_target(df):
             "time":            fmt_clock(row["Time Created"]),
             "duration":        int(row["duration"]),
             "duration_fmt":    fmt_time(row["duration"]),
-            "over_by_seconds": int(row["duration"] - TARGET_SECONDS),
-            "over_by":         fmt_time(row["duration"] - TARGET_SECONDS),
+            "over_by_seconds": int(row["duration"] - target_seconds),
+            "over_by":         fmt_time(row["duration"] - target_seconds),
             "items":           str(row["Items in Ticket"]),
             "item_count":      int(row["Number of Items"]),
         })
@@ -216,7 +216,7 @@ def all_over_target(df):
 # Chart builders
 # ---------------------------------------------------------------------------
 
-def build_timeline_chart(df):
+def build_timeline_chart(df, target_seconds=TARGET_SECONDS):
     over_df = df[df["over_target"]]
     ok_df   = df[~df["over_target"]]
     traces  = []
@@ -236,7 +236,7 @@ def build_timeline_chart(df):
         traces.append({
             "x": over_df["Time Created"].dt.strftime("%H:%M:%S").tolist(),
             "y": over_df["duration"].tolist(),
-            "text": [f"{r['Ticket Name']}<br>{fmt_time(r['duration'])} (+{fmt_time(r['duration']-TARGET_SECONDS)})<br>{r['Items in Ticket']}"
+            "text": [f"{r['Ticket Name']}<br>{fmt_time(r['duration'])} (+{fmt_time(r['duration']-target_seconds)})<br>{r['Items in Ticket']}"
                      for _, r in over_df.iterrows()],
             "mode": "markers", "type": "scatter", "name": "Over Target",
             "marker": {"color": "#dc2626", "size": 8, "opacity": 0.85, "line": {"width": 0}},
@@ -245,16 +245,17 @@ def build_timeline_chart(df):
 
     if not df.empty:
         times = sorted(df["Time Created"].dt.strftime("%H:%M:%S").tolist())
+        target_label = fmt_time(target_seconds)
         traces.append({
-            "x": [times[0], times[-1]], "y": [TARGET_SECONDS, TARGET_SECONDS],
-            "mode": "lines", "type": "scatter", "name": "Target (4:54)",
+            "x": [times[0], times[-1]], "y": [target_seconds, target_seconds],
+            "mode": "lines", "type": "scatter", "name": f"Target ({target_label})",
             "line": {"color": "#d97706", "width": 2, "dash": "dash"},
             "hoverinfo": "skip",
         })
     return traces
 
 
-def build_longest_chart(df, n=15):
+def build_longest_chart(df, n=15, target_seconds=TARGET_SECONDS):
     top = df.nlargest(n, "duration").sort_values("duration")
     return {
         "x": top["duration"].tolist(),
@@ -263,13 +264,13 @@ def build_longest_chart(df, n=15):
         "text":         [fmt_time(d) for d in top["duration"].tolist()],
         "textposition": "outside",
         "type": "bar", "orientation": "h",
-        "marker": {"color": ["#dc2626" if d > TARGET_SECONDS else "#2B4628"
+        "marker": {"color": ["#dc2626" if d > target_seconds else "#2B4628"
                               for d in top["duration"].tolist()]},
         "hovertemplate": "%{y}<br>%{text}<extra></extra>",
     }
 
 
-def build_hourly_chart(hourly):
+def build_hourly_chart(hourly, target_seconds=TARGET_SECONDS):
     labels = [h["hour_label"] for h in hourly]
     return [
         {"x": labels, "y": [h["on_time"] for h in hourly], "name": "On Target",
@@ -281,7 +282,7 @@ def build_hourly_chart(hourly):
     ]
 
 
-def build_source_chart(sources):
+def build_source_chart(sources, target_seconds=TARGET_SECONDS):
     labels = [s["source"] for s in sources]
     return [
         {"x": labels, "y": [s["on_time"] for s in sources], "name": "On Target",
