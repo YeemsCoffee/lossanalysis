@@ -437,22 +437,32 @@ def save_day_tickets(report_date: str, df: pd.DataFrame, location: str = None):
     """Delete existing tickets for date (and location if provided), then insert the full new set."""
     _ensure_schema()
     uploaded_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    rows = [
-        (
-            report_date,
-            location or None,
-            str(row["Ticket Name"]),
-            str(row["Order Source"]),
-            int(row["Number of Items"]),
-            str(row["Items in Ticket"]),
-            int(row["duration"]),
-            str(row["Time Created"]),
-            str(row["Time Completed"]),
-            str(row.get("Device Name", "")),
-            uploaded_at,
-        )
-        for _, row in df.iterrows()
-    ]
+
+    # Build the tuples off the columns directly — iterrows() boxes every row
+    # into a Series, which dominates the cost on a month-sized upload.
+    n       = len(df)
+    devices = (df["Device Name"].astype(str) if "Device Name" in df.columns
+               else pd.Series([""] * n, index=df.index))
+    rows = list(zip(
+        [report_date] * n,
+        [location or None] * n,
+        df["Ticket Name"].astype(str),
+        df["Order Source"].astype(str),
+        df["Number of Items"].astype(int),
+        df["Items in Ticket"].astype(str),
+        df["duration"].astype(int),
+        df["Time Created"].astype(str),
+        df["Time Completed"].astype(str),
+        devices,
+        [uploaded_at] * n,
+    ))
+
+    insert_sql = """
+        INSERT INTO tickets
+           (report_date, location, ticket_name, order_source, num_items, items,
+            duration, time_created, time_completed, device_name, uploaded_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)
+    """
     with _get_cursor() as cur:
         if location:
             cur.execute(
@@ -461,24 +471,28 @@ def save_day_tickets(report_date: str, df: pd.DataFrame, location: str = None):
             )
         else:
             cur.execute(_adapt("DELETE FROM tickets WHERE report_date = ?"), (report_date,))
-        cur.executemany(_adapt("""
-            INSERT INTO tickets
-               (report_date, location, ticket_name, order_source, num_items, items,
-                duration, time_created, time_completed, device_name, uploaded_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
-        """), rows)
+        if not rows:
+            return
+        if IS_POSTGRES:
+            # execute_values sends one multi-row INSERT; executemany would send
+            # a separate round trip per ticket.
+            psycopg2.extras.execute_values(
+                cur,
+                "INSERT INTO tickets"
+                " (report_date, location, ticket_name, order_source, num_items,"
+                "  items, duration, time_created, time_completed, device_name,"
+                "  uploaded_at) VALUES %s",
+                rows,
+                page_size=1000,
+            )
+        else:
+            cur.executemany(insert_sql, rows)
 
 
-def get_tickets_df(from_date: str = None, to_date: str = None,
-                   location: str = None, target_seconds: int = 294) -> pd.DataFrame:
-    """
-    Load tickets from the DB as a DataFrame matching the column structure
-    that parse_report() produces, plus a 'report_date' column.
-    """
-    _ensure_schema()
-    sql        = "SELECT * FROM tickets"
-    params     = []
-    conditions = []
+def _ticket_filters(from_date: str = None, to_date: str = None,
+                    location: str = None) -> tuple:
+    """Build the shared WHERE clause for ticket queries. Returns (sql, params)."""
+    conditions, params = [], []
     if from_date:
         conditions.append("report_date >= ?")
         params.append(from_date)
@@ -488,9 +502,114 @@ def get_tickets_df(from_date: str = None, to_date: str = None,
     if location:
         conditions.append("location = ?")
         params.append(location)
-    if conditions:
-        sql += " WHERE " + " AND ".join(conditions)
-    sql += " ORDER BY time_created ASC"
+    where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+    return where, params
+
+
+# Hour-of-day out of the stored "YYYY-MM-DD HH:MM:SS" string. substr() with
+# this signature behaves identically on SQLite and Postgres.
+_HOUR_EXPR = "CAST(substr(time_created, 12, 2) AS INTEGER)"
+
+# duration > target, as a 0/1 column both backends can SUM().
+_OVER_EXPR = "SUM(CASE WHEN duration > ? THEN 1 ELSE 0 END)"
+
+
+def get_daily_summary(from_date: str = None, to_date: str = None,
+                      location: str = None, target_seconds: int = 294) -> list:
+    """
+    Per-day totals, aggregated by the database.
+
+    The History page only ever needed these numbers, not the underlying
+    tickets — this returns one row per day instead of thousands per day.
+    """
+    _ensure_schema()
+    where, params = _ticket_filters(from_date, to_date, location)
+    sql = f"""
+        SELECT report_date,
+               COUNT(*)            AS total,
+               {_OVER_EXPR}        AS over_count,
+               AVG(duration * 1.0) AS avg_seconds,
+               MAX(duration)       AS longest_seconds
+        FROM tickets{where}
+        GROUP BY report_date
+        ORDER BY report_date ASC
+    """
+    with _get_cursor() as cur:
+        cur.execute(_adapt(sql), [target_seconds] + params)
+        rows = [dict(r) for r in cur.fetchall()]
+
+    for r in rows:
+        r["total"]           = int(r["total"])
+        r["over_count"]      = int(r["over_count"] or 0)
+        r["avg_seconds"]     = float(r["avg_seconds"] or 0)
+        r["longest_seconds"] = int(r["longest_seconds"] or 0)
+    return rows
+
+
+def get_source_daily_summary(from_date: str = None, to_date: str = None,
+                             location: str = None, target_seconds: int = 294) -> list:
+    """Per (order source, day) totals — for the source trend chart."""
+    _ensure_schema()
+    where, params = _ticket_filters(from_date, to_date, location)
+    sql = f"""
+        SELECT TRIM(order_source) AS source,
+               report_date,
+               COUNT(*)           AS total,
+               {_OVER_EXPR}       AS over_count
+        FROM tickets{where}
+        GROUP BY TRIM(order_source), report_date
+        ORDER BY report_date ASC
+    """
+    with _get_cursor() as cur:
+        cur.execute(_adapt(sql), [target_seconds] + params)
+        rows = [dict(r) for r in cur.fetchall()]
+
+    for r in rows:
+        r["total"]      = int(r["total"])
+        r["over_count"] = int(r["over_count"] or 0)
+    return rows
+
+
+def get_hourly_daily_summary(from_date: str = None, to_date: str = None,
+                             location: str = None, target_seconds: int = 294) -> list:
+    """
+    Per (hour of day, day) totals — for the hourly chart.
+
+    Grouped this far and no further: the chart averages each day's hourly
+    on-time rate, which is an average of ratios rather than a ratio of sums,
+    so the last step happens in Python over a few hundred rows.
+    """
+    _ensure_schema()
+    where, params = _ticket_filters(from_date, to_date, location)
+    sql = f"""
+        SELECT {_HOUR_EXPR} AS hour,
+               report_date,
+               COUNT(*)     AS total,
+               {_OVER_EXPR} AS over_count
+        FROM tickets{where}
+        GROUP BY {_HOUR_EXPR}, report_date
+        ORDER BY hour ASC
+    """
+    with _get_cursor() as cur:
+        cur.execute(_adapt(sql), [target_seconds] + params)
+        rows = [dict(r) for r in cur.fetchall()]
+
+    for r in rows:
+        r["hour"]       = int(r["hour"])
+        r["total"]      = int(r["total"])
+        r["over_count"] = int(r["over_count"] or 0)
+    return rows
+
+
+def get_tickets_df(from_date: str = None, to_date: str = None,
+                   location: str = None, target_seconds: int = 294) -> pd.DataFrame:
+    """
+    Load tickets from the DB as a DataFrame matching the column structure
+    that parse_report() produces, plus a 'report_date' column.
+    """
+    _ensure_schema()
+    where, params = _ticket_filters(from_date, to_date, location)
+    sql = "SELECT * FROM tickets" + where + " ORDER BY time_created ASC"
 
     with _get_cursor() as cur:
         cur.execute(_adapt(sql), params)
