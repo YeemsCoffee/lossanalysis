@@ -6,3 +6,6 @@ venv/
 uploads/*.csv
 .DS_Store
 *.egg-info/
+
+# Local SQLite dev database — real ticket data, never commit
+history.db
