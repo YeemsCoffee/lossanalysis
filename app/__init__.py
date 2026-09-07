@@ -1,18 +1,40 @@
 import os
-from flask import Flask
+from flask import Flask, flash, redirect, request, url_for
 from flask_login import LoginManager
+from flask_wtf.csrf import CSRFProtect
 
 login_manager = LoginManager()
+csrf          = CSRFProtect()
+
+DEV_SECRET = "dev-secret-key-change-in-production"
+
+# Keep in step with client_max_body_size in .platform/nginx/conf.d/custom.conf,
+# so a file nginx accepts isn't then rejected by Flask.
+MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "64"))
 
 
 def create_app():
     app = Flask(__name__)
 
-    # Secret key — must be overridden in production via SECRET_KEY env var
-    app.config["SECRET_KEY"] = os.environ.get(
-        "SECRET_KEY", "dev-secret-key-change-in-production"
-    )
-    app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB
+    # Session cookies are signed with this. Falling back to a published
+    # constant in production would let anyone forge a login, so refuse to
+    # start instead — DATABASE_URL being set is what marks a real deployment.
+    secret = os.environ.get("SECRET_KEY", "")
+    if not secret:
+        if os.environ.get("DATABASE_URL"):
+            raise RuntimeError(
+                "SECRET_KEY is not set. Set it as an environment property "
+                "before starting the app — without it session cookies are "
+                "forgeable. Generate one with: "
+                'python -c "import secrets; print(secrets.token_hex(32))"'
+            )
+        secret = DEV_SECRET  # local SQLite development only
+    app.config["SECRET_KEY"] = secret
+
+    app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
+
+    # Reject cross-site POSTs to the admin and auth endpoints.
+    csrf.init_app(app)
 
     # Flask-Login setup
     login_manager.init_app(app)
@@ -40,5 +62,11 @@ def create_app():
 
     from .routes import bp
     app.register_blueprint(bp)
+
+    @app.errorhandler(413)
+    def upload_too_large(e):
+        flash(f"That file is larger than the {MAX_UPLOAD_MB} MB upload limit. "
+              "Try splitting the report into smaller date ranges.", "error")
+        return redirect(url_for("main.index")), 413
 
     return app
