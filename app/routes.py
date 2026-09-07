@@ -6,10 +6,11 @@ from werkzeug.security import check_password_hash
 
 from .analysis import (
     parse_report, analyze_df,
-    fmt_time, fmt_hour, source_summary,
+    fmt_time, fmt_hour,
 )
 from .db import (
     save_day_tickets, get_tickets_df, get_date_bounds, get_distinct_dates,
+    get_daily_summary, get_source_daily_summary, get_hourly_daily_summary,
     get_user_by_email, update_last_login,
     create_user, list_users, set_user_active, update_user_location,
     create_reset_token, get_valid_reset_token, mark_token_used,
@@ -230,9 +231,13 @@ def history():
     from_date = request.args.get("from", earliest)
     to_date   = request.args.get("to",   latest)
 
-    df = get_tickets_df(from_date, to_date, location=location if location else None,
-                        target_seconds=targets["target_seconds"])
-    if df.empty:
+    loc = location if location else None
+    tgt = targets["target_seconds"]
+
+    # Every number on this page is an aggregate, so let the database do the
+    # grouping and return a row per day instead of a row per ticket.
+    daily = get_daily_summary(from_date, to_date, location=loc, target_seconds=tgt)
+    if not daily:
         return render_template("history.html", rows=[], charts=None,
                                from_date=from_date, to_date=to_date,
                                earliest=earliest, latest=latest,
@@ -242,14 +247,14 @@ def history():
 
     # ---- Per-day summary rows ------------------------------------------------
     rows = []
-    for date_val, day_df in df.groupby("report_date"):
-        total   = len(day_df)
-        over    = int(day_df["over_target"].sum())
+    for d in daily:
+        total   = d["total"]
+        over    = d["over_count"]
         on_time = total - over
-        avg     = round(day_df["duration"].mean())
-        longest = int(day_df["duration"].max())
+        avg     = round(d["avg_seconds"])
+        longest = d["longest_seconds"]
         rows.append({
-            "report_date":     date_val,
+            "report_date":     d["report_date"],
             "total_tickets":   total,
             "over_count":      over,
             "on_time_count":   on_time,
@@ -312,18 +317,19 @@ def history():
     ]
 
     # Source on-target % trend
-    all_sources   = sorted({s["source"] for s in source_summary(df)})
+    by_source = {}
+    for r in get_source_daily_summary(from_date, to_date, location=loc,
+                                      target_seconds=tgt):
+        by_source.setdefault(r["source"], []).append(r)
+
+    all_sources   = sorted(by_source)
     source_colors = ["#2B4628", "#9bc1cb", "#d97706", "#6b7280"]
     source_traces = []
     for i, src in enumerate(all_sources):
-        xs, ys = [], []
-        for date_val, day_df in df.groupby("report_date"):
-            src_df = day_df[day_df["source"] == src]
-            if not src_df.empty:
-                total = len(src_df)
-                on_t  = int((~src_df["over_target"]).sum())
-                xs.append(date_val)
-                ys.append(round(on_t / total * 100, 1))
+        entries = sorted(by_source[src], key=lambda r: r["report_date"])
+        xs = [e["report_date"] for e in entries]
+        ys = [round((e["total"] - e["over_count"]) / e["total"] * 100, 1)
+              for e in entries]
         source_traces.append({
             "x": xs, "y": ys, "name": src,
             "type": "scatter", "mode": "lines+markers",
@@ -332,23 +338,23 @@ def history():
             "hovertemplate": f"{src}<br>%{{x}}<br><b>%{{y:.1f}}%</b> on target<extra></extra>",
         })
 
-    # Hour-of-day bar chart
+    # Hour-of-day bar chart — average of each day's on-time rate for that hour
+    by_hour = {}
+    for r in get_hourly_daily_summary(from_date, to_date, location=loc,
+                                      target_seconds=tgt):
+        by_hour.setdefault(r["hour"], []).append(r)
+
     hour_rows = []
-    for hour, h_df in df.groupby("hour"):
-        daily_rates = []
-        for _, day_h_df in h_df.groupby("report_date"):
-            t    = len(day_h_df)
-            on_t = int((~day_h_df["over_target"]).sum())
-            daily_rates.append(on_t / t * 100 if t else 0)
-        avg_rate  = round(sum(daily_rates) / len(daily_rates), 1)
-        total_tix = int(len(h_df))
+    for hour in sorted(by_hour):
+        entries     = by_hour[hour]
+        daily_rates = [(e["total"] - e["over_count"]) / e["total"] * 100
+                       for e in entries]
         hour_rows.append({
-            "hour":          int(hour),
-            "hour_label":    fmt_hour(int(hour)),
-            "pct_on_target": avg_rate,
-            "total":         total_tix,
+            "hour":          hour,
+            "hour_label":    fmt_hour(hour),
+            "pct_on_target": round(sum(daily_rates) / len(daily_rates), 1),
+            "total":         sum(e["total"] for e in entries),
         })
-    hour_rows.sort(key=lambda x: x["hour"])
 
     hour_trace = [{
         "x":    [h["hour_label"] for h in hour_rows],
@@ -448,6 +454,66 @@ def drivers():
         target_fmt=target_fmt,
         target_pct=target_pct,
     )
+
+
+# ---------------------------------------------------------------------------
+# Patterns (day of week, weekday x hour, location comparison)
+# ---------------------------------------------------------------------------
+
+@bp.route("/patterns")
+@login_required
+def patterns():
+    from .analysis_patterns import (
+        location_comparison, weekday_hour_heatmap, weekday_summary,
+    )
+
+    earliest, latest = get_date_bounds()
+    location   = request.args.get("location", "")
+    targets    = get_targets()
+    target_fmt = fmt_time(targets["target_seconds"])
+    target_pct = targets["target_pct"]
+
+    base = dict(from_date=None, to_date=None, earliest=None, latest=None,
+                location=location, locations=LOCATIONS,
+                target_fmt=target_fmt, target_pct=target_pct)
+
+    if not earliest:
+        return render_template("patterns.html", patterns=None, **base)
+
+    from_date = request.args.get("from", earliest)
+    to_date   = request.args.get("to",   latest)
+    loc       = location if location else None
+    tgt       = targets["target_seconds"]
+
+    base.update(from_date=from_date, to_date=to_date,
+                earliest=earliest, latest=latest)
+
+    daily = get_daily_summary(from_date, to_date, location=loc, target_seconds=tgt)
+    if not daily:
+        return render_template("patterns.html", patterns=None, **base)
+
+    hourly = get_hourly_daily_summary(from_date, to_date, location=loc,
+                                      target_seconds=tgt)
+
+    # The comparison always spans both stores, whatever the tab filter is.
+    daily_by_location = {
+        name: get_daily_summary(from_date, to_date, location=name, target_seconds=tgt)
+        for name in LOCATIONS
+    }
+
+    result = {
+        "weekday":    weekday_summary(daily, target_pct),
+        "heatmap":    weekday_hour_heatmap(hourly, target_pct),
+        "comparison": location_comparison(daily_by_location, target_pct),
+        "total_tickets": sum(d["total"] for d in daily),
+        "days": len(daily),
+    }
+    charts = {
+        "weekday":    json.dumps(result["weekday"]["chart"]),
+        "heatmap":    json.dumps(result["heatmap"]["chart"]),
+        "comparison": json.dumps(result["comparison"]["chart"]),
+    }
+    return render_template("patterns.html", patterns=result, charts=charts, **base)
 
 
 # ---------------------------------------------------------------------------
