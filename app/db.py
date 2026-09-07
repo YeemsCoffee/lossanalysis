@@ -97,6 +97,9 @@ def init_db():
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_report_date ON tickets(report_date)"
         )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_location ON tickets(location)"
+        )
 
         cur.execute(f"""
             CREATE TABLE IF NOT EXISTS users (
@@ -455,8 +458,11 @@ def get_tickets_df(from_date: str = None, to_date: str = None,
         "items":        "Items in Ticket",
         "device_name":  "Device Name",
     })
-    df["Time Created"]   = pd.to_datetime(df["time_created"])
-    df["Time Completed"] = pd.to_datetime(df["time_completed"])
+    # We always write these ourselves as str(Timestamp) (see save_day_tickets),
+    # so they're consistently ISO-like — pin the format to avoid pandas falling
+    # back to a slow per-row dateutil parse on large history/drivers queries.
+    df["Time Created"]   = pd.to_datetime(df["time_created"], format="ISO8601")
+    df["Time Completed"] = pd.to_datetime(df["time_completed"], format="ISO8601")
     df["duration"]       = df["duration"].astype(float)
     df["over_target"]    = df["duration"] > target_seconds
     df["seconds_over"]   = (df["duration"] - target_seconds).clip(lower=0)
