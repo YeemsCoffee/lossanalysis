@@ -24,6 +24,7 @@
           <a href="{{ url_for('main.index') }}" class="nav-link">Upload</a>
           <a href="{{ url_for('main.history') }}" class="nav-link">History</a>
           <a href="{{ url_for('main.drivers') }}" class="nav-link">Loss Drivers</a>
+          <a href="{{ url_for('main.patterns') }}" class="nav-link">Patterns</a>
           {% if current_user.is_admin %}
             <a href="{{ url_for('main.admin_users') }}" class="nav-link">Manage</a>
             <a href="{{ url_for('main.admin_settings') }}" class="nav-link">Settings</a>
@@ -32,6 +33,7 @@
         <div class="header-user">
           <span class="user-name">{{ current_user.name }}</span>
           <form method="post" action="{{ url_for('main.logout') }}" style="display:inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn-signout">Sign Out</button>
           </form>
         </div>

@@ -9,6 +9,7 @@
   <h2>🎯 Performance Targets</h2>
   <div class="section-sub">These apply to all locations and all managers.</div>
   <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="field-group">
       <label class="field-label">Ticket Target Time</label>
       <div style="display:flex; gap:12px; align-items:center;">
