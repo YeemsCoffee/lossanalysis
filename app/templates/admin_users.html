@@ -13,6 +13,7 @@
   <div class="section-sub">Use this to tag existing ticket data that was uploaded before location support was added.</div>
   <form method="post" action="{{ url_for('main.admin_assign_location') }}"
         style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <select class="field-input" name="location" required
             style="width:auto; padding:9px 14px;">
       <option value="">Select location…</option>
@@ -39,6 +40,7 @@
 
   <form method="post" action="{{ url_for('main.admin_create_user') }}"
         style="display:grid; grid-template-columns:1fr 1fr; gap:16px 24px; align-items:end;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="field-group" style="margin:0;">
       <label class="field-label">Name</label>
       <input class="field-input" type="text" name="name" required placeholder="e.g. Jordan Smith">
@@ -110,6 +112,7 @@
               <form method="post"
                     action="{{ url_for('main.admin_update_location', user_id=u.id) }}"
                     style="display:flex; gap:6px; align-items:center;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <select name="location"
                         style="padding:4px 8px; border:1px solid var(--gray-light); border-radius:6px;
                                font-size:12px; font-family:inherit; color:#1f2937;">
@@ -136,6 +139,7 @@
                 <form method="post"
                       action="{{ url_for('main.admin_toggle_user', user_id=u.id) }}"
                       style="display:inline;">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                   {% if u.is_active %}
                     <input type="hidden" name="action" value="disable">
                     <button type="submit"

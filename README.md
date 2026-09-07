@@ -25,7 +25,7 @@ Or skip auth entirely for local testing by temporarily commenting out
 ## Deploying to AWS
 
 See **[DEPLOY.md](DEPLOY.md)** for the full step-by-step guide.  
-Short version: RDS PostgreSQL + AWS App Runner, configured via env vars.
+Short version: RDS PostgreSQL + AWS Elastic Beanstalk, configured via env vars.
 
 ## What it shows
 
@@ -38,6 +38,8 @@ Short version: RDS PostgreSQL + AWS App Runner, configured via env vars.
 - **Order source performance** — on-target rate per channel (POS, Square Online, Uber Eats, etc.)
 - **Searchable over-target table** — every ticket that missed, sorted by duration
 - **Historical dashboard** — trends, heatmaps, and day-by-day table across any date range
+- **Loss Drivers** — kitchen load threshold, cascade effect, problem items, order-size threshold
+- **Patterns** — day-of-week performance, weekday x hour hot spots, and store comparison
 
 ## Environment variables
 
@@ -47,8 +49,28 @@ Short version: RDS PostgreSQL + AWS App Runner, configured via env vars.
 | `DATABASE_URL` | ✅ | PostgreSQL connection string (`postgresql://user:pass@host:5432/db`) |
 | `INITIAL_ADMIN_EMAIL` | First deploy only | Email for the auto-seeded admin account |
 | `INITIAL_ADMIN_PASSWORD` | First deploy only | Password for the auto-seeded admin account |
+| `MAX_UPLOAD_MB` | | Upload size cap, default 64 — keep in step with nginx |
+| `DB_POOL_MAX` | | Postgres connections per worker, default 4 |
 
 Leave `DATABASE_URL` unset (or empty) to use local SQLite (`history.db`).
+
+Without `SECRET_KEY`, the app refuses to start when `DATABASE_URL` is set —
+session cookies signed with a known key would be forgeable.
+
+## Running the tests
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+pytest
+```
+
+That runs everything against SQLite. To also exercise the production Postgres
+path — connection pooling, batched inserts, the SQL aggregation — point it at a
+scratch database:
+
+```bash
+TEST_DATABASE_URL=postgresql://user@localhost/lossanalysis_test pytest
+```
 
 ## Replacing the logo
 
