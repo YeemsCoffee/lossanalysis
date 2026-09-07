@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+{% block title %}Patterns · Yeems Coffee{% endblock %}
+
+{% block head_extra %}
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="results-header">
+  <h1>Patterns</h1>
+  <div class="date">When in the week losses happen · target {{ target_fmt }} · {{ target_pct }}% goal{% if location %} · {{ location }}{% endif %}</div>
+</div>
+
+<!-- Location filter tabs -->
+<div class="location-tabs">
+  <a href="{{ url_for('main.patterns', **({'from': from_date, 'to': to_date} if from_date else {})) }}"
+     class="location-tab {% if not location %}active{% endif %}">All</a>
+  {% for loc in locations %}
+    <a href="{{ url_for('main.patterns', location=loc, **({'from': from_date, 'to': to_date} if from_date else {})) }}"
+       class="location-tab {% if location == loc %}active{% endif %}">{{ loc }}</a>
+  {% endfor %}
+</div>
+
+{% if not patterns %}
+  <div class="section" style="text-align:center; padding:60px; color:var(--gray);">
+    <div style="font-size:48px; margin-bottom:16px;">📅</div>
+    <div style="font-size:18px; font-weight:700; color:var(--green);">No data to analyze yet</div>
+    <div style="margin-top:8px;">Upload a couple of weeks of reports to see weekly patterns.</div>
+    <a href="{{ url_for('main.index') }}" class="btn" style="width:auto; display:inline-block; margin-top:24px; padding:12px 28px;">Upload a Report</a>
+  </div>
+{% else %}
+
+<!-- Date range picker -->
+<div class="section" style="padding:16px 24px; margin-bottom:16px;">
+  <form method="get" action="{{ url_for('main.patterns') }}"
+        style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+    {% if location %}<input type="hidden" name="location" value="{{ location }}">{% endif %}
+    <label style="font-weight:700; color:var(--green); font-size:14px;">Date range</label>
+    <input type="date" name="from" value="{{ from_date or '' }}"
+           min="{{ earliest or '' }}" max="{{ latest or '' }}"
+           style="padding:7px 10px; border:2px solid var(--gray-light); border-radius:8px; font-family:inherit; font-size:14px;">
+    <span style="color:var(--gray);">to</span>
+    <input type="date" name="to" value="{{ to_date or '' }}"
+           min="{{ earliest or '' }}" max="{{ latest or '' }}"
+           style="padding:7px 10px; border:2px solid var(--gray-light); border-radius:8px; font-family:inherit; font-size:14px;">
+    <button type="submit"
+            style="padding:7px 18px; background:var(--green); color:var(--cream); border:none; border-radius:8px; font-weight:700; font-size:14px; cursor:pointer; font-family:inherit;">Apply</button>
+    <span style="color:var(--gray); font-size:13px; margin-left:auto;">{{ "{:,}".format(patterns.total_tickets) }} tickets over {{ patterns.days }} days</span>
+  </form>
+</div>
+
+<!-- 1. Day of week -->
+<div class="section">
+  <h2>📆 Day of the Week</h2>
+  <div class="section-sub">
+    On-target rate for each weekday, averaged across the days in range — so one unusually busy Saturday doesn't speak for every Saturday.
+  </div>
+  {% if patterns.weekday.worst and patterns.weekday.best %}
+    {% if patterns.weekday.worst.pct_on_target < target_pct %}
+      <div class="driver-callout danger">
+        📉 <strong>{{ patterns.weekday.worst.weekday }}s are your weak day</strong> —
+        <strong>{{ patterns.weekday.worst.pct_on_target }}%</strong> on target versus
+        {{ patterns.weekday.best.pct_on_target }}% on {{ patterns.weekday.best.weekday }}s,
+        on about {{ patterns.weekday.worst.avg_tickets }} tickets a day.
+        Worth looking at who's scheduled.
+      </div>
+    {% else %}
+      <div class="driver-callout ok">
+        ✅ Every weekday is clearing your {{ target_pct }}% goal. Weakest is
+        {{ patterns.weekday.worst.weekday }} at {{ patterns.weekday.worst.pct_on_target }}%.
+      </div>
+    {% endif %}
+  {% endif %}
+  <div id="weekday-chart" class="chart short"></div>
+  <div class="table-wrap" style="margin-top:16px;">
+    <table>
+      <thead><tr><th>Day</th><th>On-Target</th><th>Days</th><th>Tickets</th><th>Avg/Day</th></tr></thead>
+      <tbody>
+        {% for r in patterns.weekday.rows %}
+          <tr>
+            <td><strong style="color:var(--green);">{{ r.weekday }}</strong></td>
+            <td><span class="duration-cell {% if r.pct_on_target < target_pct %}over{% else %}ok{% endif %}">{{ r.pct_on_target }}%</span></td>
+            <td>{{ r.days }}</td>
+            <td>{{ "{:,}".format(r.tickets) }}</td>
+            <td>{{ r.avg_tickets }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- 2. Weekday x hour heatmap -->
+<div class="section">
+  <h2>🗓 The Weekly Hot Spots</h2>
+  <div class="section-sub">
+    Every weekday-and-hour combination. Red is where the kitchen consistently misses target. Cells with fewer than 5 tickets are left blank.
+  </div>
+  {% if patterns.heatmap.has_data %}
+    {% if patterns.heatmap.worst and patterns.heatmap.worst.pct < target_pct %}
+      <div class="driver-callout danger">
+        🎯 <strong>Worst window: {{ patterns.heatmap.worst.weekday }} at {{ patterns.heatmap.worst.hour }}</strong> —
+        only <strong>{{ patterns.heatmap.worst.pct }}%</strong> on target across
+        {{ patterns.heatmap.worst.tickets }} tickets. This is the single most specific
+        thing on the site to act on: one extra pair of hands in that window.
+      </div>
+    {% else %}
+      <div class="driver-callout ok">✅ No weekday-and-hour window is falling below your goal.</div>
+    {% endif %}
+    <div id="heatmap-chart" class="chart"></div>
+  {% else %}
+    <div class="driver-callout ok">Not enough data yet to fill the grid — a few more weeks will populate it.</div>
+  {% endif %}
+</div>
+
+<!-- 3. Location comparison -->
+<div class="section">
+  <h2>🏪 Gardena vs Koreatown</h2>
+  <div class="section-sub">Both stores over the same date range, regardless of the filter above.</div>
+  {% if patterns.comparison.has_data %}
+    <div class="driver-callout {% if patterns.comparison.gap >= 10 %}danger{% else %}ok{% endif %}">
+      {% if patterns.comparison.gap >= 10 %}
+        ↔️ <strong>{{ patterns.comparison.leader.location }} is {{ patterns.comparison.gap }} points ahead of {{ patterns.comparison.laggard.location }}</strong>
+        ({{ patterns.comparison.leader.pct_on_target }}% vs {{ patterns.comparison.laggard.pct_on_target }}% on target).
+        A gap that size is usually process, not volume — worth finding what
+        {{ patterns.comparison.leader.location }} does differently.
+      {% else %}
+        ✅ The two stores are within {{ patterns.comparison.gap }} points of each other
+        ({{ patterns.comparison.leader.pct_on_target }}% vs {{ patterns.comparison.laggard.pct_on_target }}%) — performance is consistent across locations.
+      {% endif %}
+    </div>
+    <div class="stat-grid">
+      {% for s in patterns.comparison.stats %}
+        <div class="stat-card {% if not s.meets_goal %}{% if s.pct_on_target < target_pct - 15 %}danger{% else %}amber{% endif %}{% endif %}">
+          <div class="label">{{ s.location }}</div>
+          <div class="value">{{ s.pct_on_target }}%</div>
+          <div class="sub">on target · {{ "{:,}".format(s.tickets) }} tickets</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">{{ s.location }} Avg Time</div>
+          <div class="value" style="font-size:22px;">{{ s.avg_fmt }}</div>
+          <div class="sub">{{ s.avg_tickets }} tickets/day · worst {{ s.worst_day.date }}</div>
+        </div>
+      {% endfor %}
+    </div>
+    <div id="comparison-chart" class="chart short"></div>
+  {% else %}
+    <div class="driver-callout ok">
+      Only one location has data in this range, so there's nothing to compare yet.
+    </div>
+  {% endif %}
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if charts %}
+<script>
+  const cfg = { responsive: true, displayModeBar: false };
+  const baseLayout = (extra = {}) => Object.assign({
+    margin: { l: 55, r: 20, t: 10, b: 50 },
+    paper_bgcolor: '#fff', plot_bgcolor: '#fff',
+    font: { family: 'Nunito, sans-serif', color: '#1f2937' },
+    showlegend: false,
+  }, extra);
+
+  Plotly.newPlot('weekday-chart', {{ charts.weekday | safe }}, baseLayout({
+    xaxis: { showgrid: false },
+    yaxis: { title: 'On-Target %', range: [0, 100], gridcolor: '#e5e7eb' },
+  }), cfg);
+
+  {% if patterns.heatmap.has_data %}
+  Plotly.newPlot('heatmap-chart', {{ charts.heatmap | safe }}, baseLayout({
+    margin: { l: 55, r: 20, t: 10, b: 60 },
+    xaxis: { title: 'Hour', showgrid: false },
+    yaxis: { autorange: 'reversed', showgrid: false },
+  }), cfg);
+  {% endif %}
+
+  {% if patterns.comparison.has_data %}
+  Plotly.newPlot('comparison-chart', {{ charts.comparison | safe }}, baseLayout({
+    showlegend: true,
+    legend: { orientation: 'h', y: -0.2 },
+    xaxis: { showgrid: false },
+    yaxis: { title: 'On-Target %', range: [0, 100], gridcolor: '#e5e7eb' },
+  }), cfg);
+  {% endif %}
+</script>
+{% endif %}
+{% endblock %}
