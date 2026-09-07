@@ -16,6 +16,7 @@ from contextlib import contextmanager
 try:
     import psycopg2
     import psycopg2.extras
+    import psycopg2.pool
     HAS_PSYCOPG2 = True
 except ImportError:
     HAS_PSYCOPG2 = False
@@ -24,6 +25,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "")
 DB_PATH      = Path(__file__).resolve().parent.parent / "history.db"
 TARGET_SECONDS = 294
 IS_POSTGRES  = bool(DATABASE_URL)
+POOL_MAX     = int(os.environ.get("DB_POOL_MAX", "4"))
 
 
 # ---------------------------------------------------------------------------
@@ -35,6 +37,26 @@ def _adapt(sql: str) -> str:
     return sql.replace("?", "%s") if IS_POSTGRES else sql
 
 
+_pool     = None
+_pool_pid = None
+
+
+def _get_pool():
+    """
+    Return this process's connection pool, creating it on first use.
+
+    Gunicorn forks workers, and a pool built before the fork would hand out
+    sockets shared between processes — so the pool is keyed to the pid and
+    rebuilt if we find ourselves in a child that inherited one.
+    """
+    global _pool, _pool_pid
+    pid = os.getpid()
+    if _pool is None or _pool_pid != pid:
+        _pool     = psycopg2.pool.ThreadedConnectionPool(1, POOL_MAX, DATABASE_URL)
+        _pool_pid = pid
+    return _pool
+
+
 @contextmanager
 def _get_cursor():
     """
@@ -42,16 +64,24 @@ def _get_cursor():
     Both backends yield dict-like rows (sqlite3.Row / psycopg2 RealDictCursor).
     """
     if IS_POSTGRES:
-        conn = psycopg2.connect(DATABASE_URL)
-        cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        pool = _get_pool()
+        conn = pool.getconn()
         try:
-            yield cur
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            try:
+                yield cur
+                conn.commit()
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass  # already broken; the original error is the useful one
+                raise
+            finally:
+                cur.close()
         finally:
-            conn.close()
+            # Don't hand a connection that died mid-query back to the pool.
+            pool.putconn(conn, close=bool(conn.closed))
     else:
         conn = sqlite3.connect(str(DB_PATH))
         conn.row_factory = sqlite3.Row
@@ -70,8 +100,25 @@ def _get_cursor():
 # Schema
 # ---------------------------------------------------------------------------
 
+_schema_ready = False
+
+
+def _ensure_schema():
+    """
+    Make sure the schema exists before running a query.
+
+    init_db() also runs at boot, but that can fail (an unreachable RDS, a
+    security group not open yet) and it only logs a warning — so the first
+    query in each worker retries it. Once it succeeds this is a no-op; it
+    used to re-run the full DDL against RDS on every single query.
+    """
+    if not _schema_ready:
+        init_db()
+
+
 def init_db():
     """Create tables and indexes if they don't exist; seed admin if needed."""
+    global _schema_ready
     if IS_POSTGRES:
         pk = "SERIAL PRIMARY KEY"
     else:
@@ -142,6 +189,8 @@ def init_db():
 
     # Add location column to existing tables if it doesn't already exist
     _migrate_add_location_columns()
+
+    _schema_ready = True
 
 
 def _migrate_add_location_columns():
@@ -386,7 +435,7 @@ def seed_admin_if_needed():
 
 def save_day_tickets(report_date: str, df: pd.DataFrame, location: str = None):
     """Delete existing tickets for date (and location if provided), then insert the full new set."""
-    init_db()
+    _ensure_schema()
     uploaded_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     rows = [
         (
@@ -426,7 +475,7 @@ def get_tickets_df(from_date: str = None, to_date: str = None,
     Load tickets from the DB as a DataFrame matching the column structure
     that parse_report() produces, plus a 'report_date' column.
     """
-    init_db()
+    _ensure_schema()
     sql        = "SELECT * FROM tickets"
     params     = []
     conditions = []
@@ -473,7 +522,7 @@ def get_tickets_df(from_date: str = None, to_date: str = None,
 
 
 def get_date_bounds() -> tuple:
-    init_db()
+    _ensure_schema()
     with _get_cursor() as cur:
         cur.execute("SELECT MIN(report_date) AS mn, MAX(report_date) AS mx FROM tickets")
         row = dict(cur.fetchone())
@@ -481,7 +530,7 @@ def get_date_bounds() -> tuple:
 
 
 def get_distinct_dates() -> list:
-    init_db()
+    _ensure_schema()
     with _get_cursor() as cur:
         cur.execute(
             "SELECT DISTINCT report_date FROM tickets ORDER BY report_date DESC"
