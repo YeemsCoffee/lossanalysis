@@ -1,0 +1,320 @@
+"""Square Reporting API client and the KDS -> ticket mapping."""
+import json
+import urllib.error
+import urllib.request
+
+import pytest
+
+from app import square_api, square_sync
+from app.square_sync import KDS
+
+LOCATIONS = ["Gardena", "Koreatown"]
+TARGET = 294
+
+
+# ---------------------------------------------------------------------------
+# Fake transport
+# ---------------------------------------------------------------------------
+
+class FakeResponse:
+    def __init__(self, payload):
+        self._body = json.dumps(payload).encode()
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+@pytest.fixture
+def square(monkeypatch):
+    """Capture requests and serve queued responses."""
+    state = {"requests": [], "responses": [], "fail_with": None}
+
+    def fake_urlopen(req, timeout=None):
+        state["requests"].append({
+            "url": req.full_url,
+            "method": req.get_method(),
+            "headers": dict(req.header_items()),
+            "body": json.loads(req.data.decode()) if req.data else None,
+        })
+        if state["fail_with"] is not None:
+            raise state["fail_with"]
+        if not state["responses"]:
+            return FakeResponse({"data": []})
+        return FakeResponse(state["responses"].pop(0))
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setenv("SQUARE_ACCESS_TOKEN", "test-token")
+    monkeypatch.setattr(square_sync, "STATION_TYPE", "")
+    monkeypatch.setattr(square_sync, "LOCATION_MAP", {})
+    return state
+
+
+def ticket_row(key, seconds, *, name=None, location="Yeems Coffee Gardena",
+               date="2026-09-01", created="2026-09-01T09:00:00Z",
+               completed="2026-09-01T09:05:00Z", items=2,
+               source="Register", station="expo"):
+    return {
+        KDS.TICKET_KEY: key,
+        KDS.TICKET_NAME: name or key,
+        KDS.ORDER_SOURCE: source,
+        KDS.LOCATION_NAME: location,
+        KDS.LOCAL_DATE: date,
+        KDS.DISPLAYED_AT: created,
+        KDS.CREATED_AT: created,
+        KDS.COMPLETED_AT: completed,
+        KDS.LINE_ITEM_COUNT: items,
+        KDS.STATION_TYPE: station,
+        KDS.DEVICE: "KDS-1",
+        KDS.AVG_TICKET_SECS: seconds,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Client
+# ---------------------------------------------------------------------------
+
+def test_load_sends_a_wrapped_query_with_auth(square):
+    square["responses"] = [{"data": [{"KDS.ticket_key": "a"}]}]
+    square_api.load({"measures": ["KDS.ticket_count"]})
+
+    sent = square["requests"][0]
+    assert sent["method"] == "POST"
+    assert sent["url"].endswith("/v1/load")
+    # The query must be wrapped or Square answers "Query param is required".
+    assert "query" in sent["body"]
+    assert sent["body"]["query"]["measures"] == ["KDS.ticket_count"]
+    assert sent["headers"]["Authorization"] == "Bearer test-token"
+
+
+def test_load_pages_until_a_short_page(square):
+    page = square_api.PAGE_SIZE
+    square["responses"] = [
+        {"data": [{"i": i} for i in range(page)]},      # full -> keep going
+        {"data": [{"i": i} for i in range(page)]},      # full -> keep going
+        {"data": [{"i": 1}]},                           # short -> stop
+    ]
+    rows = square_api.load({"measures": ["KDS.ticket_count"]})
+
+    assert len(rows) == page * 2 + 1
+    assert len(square["requests"]) == 3
+    assert [r["body"]["query"]["offset"] for r in square["requests"]] == [0, page, page * 2]
+
+
+def test_load_accepts_a_results_envelope(square):
+    """Be tolerant of the beta reshaping its response."""
+    square["responses"] = [{"results": [{"data": [{"KDS.ticket_key": "a"}]}]}]
+    assert square_api.load({"measures": ["KDS.ticket_count"]}) == [{"KDS.ticket_key": "a"}]
+
+
+def test_missing_token_is_a_clear_error(monkeypatch):
+    monkeypatch.delenv("SQUARE_ACCESS_TOKEN", raising=False)
+    with pytest.raises(square_api.SquareAuthError, match="No Square access token"):
+        square_api.load({"measures": ["KDS.ticket_count"]})
+
+
+def test_401_explains_the_scope(square):
+    square["fail_with"] = urllib.error.HTTPError(
+        "u", 401, "Unauthorized", {}, __import__("io").BytesIO(b"{}"))
+    with pytest.raises(square_api.SquareAuthError, match="REPORTING_READ"):
+        square_api.load({"measures": ["KDS.ticket_count"]})
+
+
+def test_check_access_reports_a_missing_kds_cube(square):
+    square["responses"] = [{"cubes": [{"name": "Orders"}], "views": [{"name": "Sales"}]}]
+    info = square_api.check_access()
+    assert info["ok"] is True and info["has_kds"] is False
+    assert "no KDS cube" in info["message"]
+
+    square["responses"] = [{"cubes": [{"name": "KDS"}, {"name": "Orders"}]}]
+    assert square_api.check_access()["has_kds"] is True
+
+
+# ---------------------------------------------------------------------------
+# Mapping
+# ---------------------------------------------------------------------------
+
+def test_rows_become_the_upload_shape():
+    df = square_sync.rows_to_df(
+        [ticket_row("t1", 250.0, items=3)],
+        [{KDS.TICKET_KEY: "t1", KDS.ITEM_NAME: "Latte", KDS.QUANTITY: 2},
+         {KDS.TICKET_KEY: "t1", KDS.ITEM_NAME: "Bagel", KDS.QUANTITY: 1}],
+        LOCATIONS)
+
+    row = df.iloc[0]
+    assert row["Ticket Name"] == "t1"
+    assert row["duration"] == 250.0
+    assert row["Number of Items"] == 3
+    assert row["location"] == "Gardena"          # from "Yeems Coffee Gardena"
+    assert row["report_date"] == "2026-09-01"
+    assert row["Items in Ticket"] == "2x Latte, Bagel"
+    assert str(df["Time Created"].dtype).startswith("datetime64")
+    # Naive local time, matching what save_day_tickets stores for CSV uploads.
+    assert df["Time Created"].dt.tz is None
+
+
+def test_location_matching_and_overrides(monkeypatch):
+    assert square_sync.map_location("Yeems Coffee - Koreatown", LOCATIONS) == "Koreatown"
+    assert square_sync.map_location("KOREATOWN", LOCATIONS) == "Koreatown"
+    assert square_sync.map_location("Somewhere Else", LOCATIONS) is None
+    assert square_sync.map_location(None, LOCATIONS) is None
+
+    monkeypatch.setattr(square_sync, "LOCATION_MAP", {"Store 42": "Gardena"})
+    assert square_sync.map_location("Store 42", LOCATIONS) == "Gardena"
+
+
+def test_tickets_without_timing_are_skipped():
+    """An open ticket has no completion time and must not become a 0-second one."""
+    rows = [ticket_row("done", 200.0),
+            ticket_row("open", None),
+            dict(ticket_row("nostart", 200.0), **{KDS.DISPLAYED_AT: None,
+                                                  KDS.CREATED_AT: None})]
+    df = square_sync.rows_to_df(rows, [], LOCATIONS)
+    assert list(df["Ticket Name"]) == ["done"]
+
+
+def test_square_local_date_wins_over_the_utc_timestamp():
+    """A late-night ticket belongs to the store's business day, not UTC's."""
+    row = ticket_row("late", 200.0, date="2026-09-01",
+                     created="2026-09-02T04:30:00Z",     # still Sep 1 locally
+                     completed="2026-09-02T04:33:00Z")
+    df = square_sync.rows_to_df([row], [], LOCATIONS)
+    assert df.iloc[0]["report_date"] == "2026-09-01"
+
+
+def test_unknown_locations_are_reported_not_written(square, monkeypatch):
+    written = []
+    monkeypatch.setattr(square_sync, "save_day_tickets",
+                        lambda d, df, loc: written.append((d, loc, len(df))))
+    square["responses"] = [
+        {"data": [ticket_row("a", 200.0, location="Yeems Coffee Gardena"),
+                  ticket_row("b", 200.0, location="Mystery Store")]},
+        {"data": []},
+    ]
+    summary = square_sync.sync_range("2026-09-01", "2026-09-01", LOCATIONS)
+
+    assert summary["unmapped_locations"] == ["Mystery Store"]
+    assert written == [("2026-09-01", "Gardena", 1)]
+
+
+def test_dry_run_writes_nothing(square, monkeypatch):
+    written = []
+    monkeypatch.setattr(square_sync, "save_day_tickets",
+                        lambda *a: written.append(a))
+    square["responses"] = [{"data": [ticket_row("a", 200.0)]}, {"data": []}]
+
+    summary = square_sync.sync_range("2026-09-01", "2026-09-01", LOCATIONS,
+                                     dry_run=True)
+    assert written == []
+    assert summary["dry_run"] is True and summary["tickets"] == 1
+    assert summary["days"][0]["tickets"] == 1
+
+
+def test_station_filter_is_sent_when_configured(square, monkeypatch):
+    monkeypatch.setattr(square_sync, "STATION_TYPE", "expo")
+    square["responses"] = [{"data": []}, {"data": []}]
+    square_sync.fetch_ticket_rows("2026-09-01", "2026-09-01")
+
+    filters = square["requests"][0]["body"]["query"]["filters"]
+    assert filters == [{"member": KDS.STATION_TYPE,
+                        "operator": "equals", "values": ["expo"]}]
+
+
+def test_no_station_filter_when_unset(square):
+    square["responses"] = [{"data": []}]
+    square_sync.fetch_ticket_rows("2026-09-01", "2026-09-01")
+    assert square["requests"][0]["body"]["query"]["filters"] == []
+
+
+def test_date_range_is_sent_as_a_time_dimension(square):
+    square["responses"] = [{"data": []}]
+    square_sync.fetch_ticket_rows("2026-09-01", "2026-09-07")
+    td = square["requests"][0]["body"]["query"]["timeDimensions"]
+    assert td == [{"dimension": KDS.TIME_FILTER,
+                   "dateRange": ["2026-09-01", "2026-09-07"]}]
+
+
+def test_ticket_key_is_grouped_so_measures_are_per_ticket(square):
+    """Grouping by ticket key is what makes the aggregate a single ticket's time."""
+    square["responses"] = [{"data": []}]
+    square_sync.fetch_ticket_rows("2026-09-01", "2026-09-01")
+    q = square["requests"][0]["body"]["query"]
+    assert KDS.TICKET_KEY in q["dimensions"]
+    assert q["measures"] == [KDS.AVG_TICKET_SECS]
+
+
+# ---------------------------------------------------------------------------
+# The headline metric
+# ---------------------------------------------------------------------------
+
+def test_on_time_pct_counts_at_or_under_target():
+    df = square_sync.rows_to_df(
+        [ticket_row("a", 100.0), ticket_row("b", TARGET),      # exactly on target
+         ticket_row("c", TARGET + 1), ticket_row("d", 500.0)],
+        [], LOCATIONS)
+    # 2 of 4 at or under 294s.
+    assert square_sync._on_time_pct(df, TARGET) == 50.0
+
+
+def test_validate_reports_a_match(square, monkeypatch):
+    stored = square_sync.rows_to_df(
+        [ticket_row("a", 100.0), ticket_row("b", 400.0)], [], LOCATIONS)
+    monkeypatch.setattr(square_sync, "get_tickets_df", lambda *a, **k: stored)
+    square["responses"] = [
+        {"data": [ticket_row("a", 100.0), ticket_row("b", 400.0)]},
+        {"data": []},
+    ]
+    res = square_sync.validate_against_csv("2026-09-01", LOCATIONS,
+                                           target_seconds=TARGET)
+    assert res["verdict"] == "match"
+    assert res["stored_on_time_pct"] == res["api_on_time_pct"] == 50.0
+    assert res["on_time_difference"] == 0.0
+
+
+def test_validate_flags_a_shifted_start_point(square, monkeypatch):
+    """Same tickets, every duration inflated — the metric must not silently pass."""
+    stored = square_sync.rows_to_df(
+        [ticket_row(k, 200.0) for k in "abcd"], [], LOCATIONS)
+    monkeypatch.setattr(square_sync, "get_tickets_df", lambda *a, **k: stored)
+    square["responses"] = [
+        {"data": [ticket_row(k, 400.0) for k in "abcd"]},   # all now over target
+        {"data": []},
+    ]
+    res = square_sync.validate_against_csv("2026-09-01", LOCATIONS,
+                                           target_seconds=TARGET)
+    assert res["verdict"] == "counts-match-metric-differs"
+    assert res["stored_on_time_pct"] == 100.0
+    assert res["api_on_time_pct"] == 0.0
+    assert res["flipped_tickets"] == 4
+    assert "different start point" in " ".join(res["notes"])
+
+
+def test_validate_flags_double_counted_stations(square, monkeypatch):
+    stored = square_sync.rows_to_df(
+        [ticket_row(k, 100.0) for k in "abcd"], [], LOCATIONS)
+    monkeypatch.setattr(square_sync, "get_tickets_df", lambda *a, **k: stored)
+    # Same tickets twice, once per station type.
+    doubled = ([ticket_row(k, 100.0, station="prep") for k in "abcd"] +
+               [ticket_row(k, 100.0, station="expo") for k in "abcd"])
+    square["responses"] = [{"data": doubled}, {"data": []}]
+
+    res = square_sync.validate_against_csv("2026-09-01", LOCATIONS,
+                                           target_seconds=TARGET)
+    assert res["verdict"] == "mismatch"
+    assert res["api_tickets"] == 8 and res["stored_tickets"] == 4
+    assert sorted(res["station_types"]) == ["expo", "prep"]
+    assert "SQUARE_STATION_TYPE" in " ".join(res["notes"])
+
+
+def test_validate_needs_something_to_compare(square, monkeypatch):
+    import pandas as pd
+    monkeypatch.setattr(square_sync, "get_tickets_df",
+                        lambda *a, **k: pd.DataFrame())
+    res = square_sync.validate_against_csv("2019-01-01", LOCATIONS,
+                                           target_seconds=TARGET)
+    assert res["verdict"] == "no-csv-data"
