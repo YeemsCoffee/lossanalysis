@@ -318,3 +318,135 @@ def test_validate_needs_something_to_compare(square, monkeypatch):
     res = square_sync.validate_against_csv("2019-01-01", LOCATIONS,
                                            target_seconds=TARGET)
     assert res["verdict"] == "no-csv-data"
+
+
+# ---------------------------------------------------------------------------
+# Frequent syncing
+# ---------------------------------------------------------------------------
+
+def test_recent_excludes_today_by_default(square, monkeypatch):
+    """The nightly-style run should not pull a day still in progress."""
+    seen = {}
+    monkeypatch.setattr(square_sync, "sync_range",
+                        lambda f, t, *a, **k: seen.update(from_=f, to=t) or {})
+    import datetime as dt
+
+    class FixedDate(dt.date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 9, 8)
+    monkeypatch.setattr(square_sync, "date", FixedDate)
+
+    square_sync.sync_recent(2, LOCATIONS)
+    assert seen == {"from_": "2026-09-06", "to": "2026-09-07"}
+
+
+def test_recent_includes_today_when_asked(square, monkeypatch):
+    """
+    The 15-minute job must cover today, and reach back a day.
+
+    This box runs UTC while the stores run Pacific, so during a Pacific evening
+    the server's "today" is already the store's tomorrow; a one-day window
+    would miss the dinner rush entirely.
+    """
+    seen = {}
+    monkeypatch.setattr(square_sync, "sync_range",
+                        lambda f, t, *a, **k: seen.update(from_=f, to=t) or {})
+    import datetime as dt
+
+    class FixedDate(dt.date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 9, 8)
+    monkeypatch.setattr(square_sync, "date", FixedDate)
+
+    square_sync.sync_recent(2, LOCATIONS, include_today=True)
+    assert seen == {"from_": "2026-09-07", "to": "2026-09-08"}
+
+
+def test_evening_pacific_ticket_lands_on_the_right_business_day():
+    """
+    18:30 Pacific on Sep 7 is 01:30 UTC on Sep 8. Square's local_date says
+    Sep 7, and that must win — otherwise a dinner rush is filed under tomorrow.
+    """
+    row = ticket_row("dinner", 320.0, date="2026-09-07",
+                     created="2026-09-08T01:30:00Z",
+                     completed="2026-09-08T01:35:20Z")
+    df = square_sync.rows_to_df([row], [], LOCATIONS)
+    assert df.iloc[0]["report_date"] == "2026-09-07"
+
+
+def test_resyncing_a_day_replaces_rather_than_appends(square, monkeypatch):
+    """Re-running every 15 minutes must not pile up duplicate rows."""
+    calls = []
+    monkeypatch.setattr(square_sync, "save_day_tickets",
+                        lambda d, df, loc: calls.append((d, loc, len(df))))
+    for tickets in (2, 5):
+        square["responses"] = [
+            {"data": [ticket_row(f"t{i}", 200.0) for i in range(tickets)]},
+            {"data": []},
+        ]
+        square_sync.sync_range("2026-09-01", "2026-09-01", LOCATIONS)
+
+    # save_day_tickets is delete-then-insert per (date, location), so the
+    # second run supersedes the first rather than adding to it.
+    assert calls == [("2026-09-01", "Gardena", 2), ("2026-09-01", "Gardena", 5)]
+
+
+def test_open_tickets_are_excluded_until_they_complete():
+    """Mid-service there are always tickets still on the pass."""
+    rows = [ticket_row("closed", 250.0), ticket_row("still-cooking", None)]
+    df = square_sync.rows_to_df(rows, [], LOCATIONS)
+    assert list(df["Ticket Name"]) == ["closed"]
+
+
+# ---------------------------------------------------------------------------
+# The write gate
+# ---------------------------------------------------------------------------
+
+def test_sync_refuses_to_write_without_the_enable_flag(square, monkeypatch, capsys):
+    monkeypatch.delenv("SQUARE_SYNC_ENABLED", raising=False)
+    called = []
+    monkeypatch.setattr(square_sync, "sync_recent",
+                        lambda *a, **k: called.append(1) or {})
+
+    assert square_sync.main(["recent", "--days", "2"]) == 0
+    assert called == []
+    assert "SQUARE_SYNC_ENABLED is not set" in capsys.readouterr().out
+
+
+def test_dry_run_works_without_the_enable_flag(square, monkeypatch):
+    monkeypatch.delenv("SQUARE_SYNC_ENABLED", raising=False)
+    called = []
+    monkeypatch.setattr(square_sync, "sync_recent", lambda *a, **k: called.append(1) or {
+        "dry_run": True, "tickets": 0, "from": "x", "to": "y",
+        "days": [], "unmapped_locations": []})
+
+    assert square_sync.main(["recent", "--dry-run"]) == 0
+    assert called == [1]
+
+
+@pytest.mark.parametrize("flag", ["1", "true", "TRUE", "yes", "on"])
+def test_enable_flag_accepts_the_usual_spellings(square, monkeypatch, flag):
+    monkeypatch.setenv("SQUARE_SYNC_ENABLED", flag)
+    called = []
+    monkeypatch.setattr(square_sync, "sync_recent", lambda *a, **k: called.append(1) or {
+        "dry_run": False, "tickets": 0, "from": "x", "to": "y",
+        "days": [], "unmapped_locations": []})
+
+    assert square_sync.main(["recent"]) == 0
+    assert called == [1]
+
+
+def test_validate_does_not_need_the_enable_flag(square, monkeypatch):
+    """Read-only commands must stay usable while the gate is shut."""
+    monkeypatch.delenv("SQUARE_SYNC_ENABLED", raising=False)
+    called = []
+    monkeypatch.setattr(square_sync, "validate_against_csv",
+                        lambda *a, **k: called.append(1) or {
+                            "verdict": "no-api-data", "date": "2026-09-01",
+                            "notes": ["x"], "station_types": [],
+                            "square_locations": []})
+
+    square_sync.main(["validate", "2026-09-01"])
+    assert called == [1]
