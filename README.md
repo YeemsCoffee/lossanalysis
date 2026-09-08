@@ -63,7 +63,7 @@ Kitchen ticket times can be pulled from Square's Reporting API instead of
 exporting a CSV. The `KDS` cube carries per-ticket prep times — the same
 figures behind the Kitchen Performance report the CSVs come from.
 
-**Set this up in order. Do not enable the nightly job until step 3 passes.**
+**Set this up in order. Do not enable the scheduled job until step 3 passes.**
 
 1. **Get a token.** developer.squareup.com → your application → Credentials →
    production access token. It needs the `REPORTING_READ` scope. Then:
@@ -102,25 +102,50 @@ figures behind the Kitchen Performance report the CSVs come from.
    `SQUARE_STATION_TYPE=expo`) or the API timing from a different start point.
    Re-run until it matches.
 
-4. **Backfill and enable.** Once validated:
+4. **Backfill and arm it.** Once validated, set `SQUARE_SYNC_ENABLED=1` and:
 
    ```bash
    python -m app.square_sync sync --from 2026-06-01 --to 2026-09-07
    ```
 
-   Then set `SQUARE_ACCESS_TOKEN` (plus any mapping variables) as Elastic
-   Beanstalk environment properties. `.ebextensions/cron-square-sync.config`
-   already installs a nightly job that pulls the last two days; it is a no-op
-   while the token is unset, so it starts working the moment you add it.
+   Then set `SQUARE_ACCESS_TOKEN`, `SQUARE_SYNC_ENABLED=1` and any mapping
+   variables as Elastic Beanstalk environment properties.
 
 Syncing writes through the same path as a CSV upload — re-running a date
-replaces it rather than duplicating, so backfills are safe to repeat.
+replaces it rather than duplicating, so backfills and repeated syncs are safe.
+
+### The scheduled job
+
+`.ebextensions/cron-square-sync.config` runs the sync **every 15 minutes**,
+which is as fresh as the Reporting API gets — most cubes lag about that long.
+Today's numbers appear on the dashboard during service rather than the next
+morning.
+
+Two switches guard it, both off by default:
+
+- without `SQUARE_ACCESS_TOKEN` the command is a no-op
+- without `SQUARE_SYNC_ENABLED=1` it refuses to write
+
+That second gate exists because syncing *replaces* the days it covers. An
+unvalidated station type or location mapping would overwrite good CSV data,
+and on a 15-minute schedule that starts minutes after deploy. `--dry-run`
+and the read-only commands work regardless.
+
+The job syncs yesterday **and** today. That is deliberate: the server runs
+UTC while the stores run Pacific, so from late afternoon the server's "today"
+is already the store's tomorrow. Square's own `local_date` files each ticket
+under the right business day.
+
+Note that today will be a partial day until close, so it shows fewer tickets
+than a finished one — worth remembering when comparing it on History or
+Patterns.
 
 ### Square environment variables
 
 | Variable | Description |
 |----------|-------------|
 | `SQUARE_ACCESS_TOKEN` | Production token with `REPORTING_READ`. Unset = syncing disabled |
+| `SQUARE_SYNC_ENABLED` | Set to `1` to allow writes. Unset = read-only, dry runs still work |
 | `SQUARE_LOCATION_MAP` | `Square name:App name` pairs, comma separated |
 | `SQUARE_STATION_TYPE` | Restrict to one KDS station (e.g. `expo`) to avoid double counting |
 | `SQUARE_API_BASE` | Defaults to `https://connect.squareup.com/reporting` |
