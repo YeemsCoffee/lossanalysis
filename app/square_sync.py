@@ -238,9 +238,19 @@ def sync_range(from_date, to_date, known_locations, token=None, dry_run=False):
     return summary
 
 
-def sync_recent(days, known_locations, token=None, dry_run=False):
-    """Sync the last N days, ending yesterday (today is still in progress)."""
-    end   = date.today() - timedelta(days=1)
+def sync_recent(days, known_locations, token=None, dry_run=False,
+                include_today=False):
+    """
+    Sync the last N days.
+
+    include_today matters more than it looks. This process runs on UTC while
+    the stores run on Pacific time, so from late afternoon onwards the server's
+    "today" is already the store's tomorrow. Reaching back a couple of days and
+    letting Square's own local_date place each ticket on its business day covers
+    the boundary in both directions — which is why the frequent sync asks for
+    two days rather than one.
+    """
+    end   = date.today() if include_today else date.today() - timedelta(days=1)
     start = end - timedelta(days=max(days, 1) - 1)
     return sync_range(start.isoformat(), end.isoformat(),
                       known_locations, token=token, dry_run=dry_run)
@@ -412,17 +422,33 @@ def main(argv=None):
     r = sub.add_parser("recent", help="pull the last N days (ending yesterday)")
     r.add_argument("--days", type=int, default=2)
     r.add_argument("--dry-run", action="store_true")
+    r.add_argument("--include-today", action="store_true",
+                   help="include the in-progress day, for frequent syncing")
 
     args = parser.parse_args(argv)
 
     from .routes import LOCATIONS
 
-    # A scheduled run on a deployment that hasn't been given a token yet should
-    # be a quiet no-op, not a nightly failure email.
+    # A scheduled run on a deployment without a token should be a quiet no-op,
+    # not a failure email every quarter of an hour.
     if not os.environ.get("SQUARE_ACCESS_TOKEN"):
         print("SQUARE_ACCESS_TOKEN is not set — skipping. Set it to enable "
               "Square syncing.")
         return 0
+
+    # Writing needs a second, deliberate switch. Syncing replaces the days it
+    # covers, so an unvalidated station type or location mapping would
+    # overwrite good CSV data — and on a 15-minute schedule that starts
+    # happening minutes after deploy rather than overnight. Reading commands
+    # (check, schema, validate) are unaffected.
+    if args.command in ("sync", "recent") and not args.dry_run:
+        if os.environ.get("SQUARE_SYNC_ENABLED", "").strip().lower() not in (
+                "1", "true", "yes", "on"):
+            print("SQUARE_SYNC_ENABLED is not set — refusing to write.\n"
+                  "Run `validate <date>` against a day you uploaded by CSV "
+                  "first, then set SQUARE_SYNC_ENABLED=1 to arm the sync.\n"
+                  "(`--dry-run` works without it.)")
+            return 0
 
     if args.command == "check":
         info = square_api.check_access()
@@ -481,7 +507,8 @@ def main(argv=None):
             summary = sync_range(args.from_date, args.to_date, LOCATIONS,
                                  dry_run=args.dry_run)
         else:
-            summary = sync_recent(args.days, LOCATIONS, dry_run=args.dry_run)
+            summary = sync_recent(args.days, LOCATIONS, dry_run=args.dry_run,
+                                  include_today=args.include_today)
 
         head = ("Would sync" if summary["dry_run"] else "Synced")
         print(f"\n{head} {summary['tickets']:,} tickets "
