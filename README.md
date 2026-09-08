@@ -57,6 +57,82 @@ Leave `DATABASE_URL` unset (or empty) to use local SQLite (`history.db`).
 Without `SECRET_KEY`, the app refuses to start when `DATABASE_URL` is set —
 session cookies signed with a known key would be forgeable.
 
+## Automatic sync from Square
+
+Kitchen ticket times can be pulled from Square's Reporting API instead of
+exporting a CSV. The `KDS` cube carries per-ticket prep times — the same
+figures behind the Kitchen Performance report the CSVs come from.
+
+**Set this up in order. Do not enable the nightly job until step 3 passes.**
+
+1. **Get a token.** developer.squareup.com → your application → Credentials →
+   production access token. It needs the `REPORTING_READ` scope. Then:
+
+   ```bash
+   export SQUARE_ACCESS_TOKEN=...        # Windows: set SQUARE_ACCESS_TOKEN=...
+   python -m app.square_sync check
+   ```
+
+   This confirms the token works and that your account has the `KDS` cube.
+
+2. **Map the locations.** Square's location names may not match this app's.
+   A dry run shows what came back and what didn't map:
+
+   ```bash
+   python -m app.square_sync sync --from 2026-09-01 --to 2026-09-01 --dry-run
+   ```
+
+   If it reports unmapped locations, set:
+
+   ```bash
+   export SQUARE_LOCATION_MAP="Yeems Coffee Gardena:Gardena,Yeems KTown:Koreatown"
+   ```
+
+3. **Prove the numbers match.** Pick a date already uploaded by CSV and
+   compare the two sources on the metric that matters — percent of tickets
+   closed at or under target:
+
+   ```bash
+   python -m app.square_sync validate 2026-08-15
+   ```
+
+   A `MATCH` means the API is measuring the same thing and history stays
+   continuous. Anything else is explained in the output; the two usual causes
+   are both prep and expo stations being counted (fix with
+   `SQUARE_STATION_TYPE=expo`) or the API timing from a different start point.
+   Re-run until it matches.
+
+4. **Backfill and enable.** Once validated:
+
+   ```bash
+   python -m app.square_sync sync --from 2026-06-01 --to 2026-09-07
+   ```
+
+   Then set `SQUARE_ACCESS_TOKEN` (plus any mapping variables) as Elastic
+   Beanstalk environment properties. `.ebextensions/cron-square-sync.config`
+   already installs a nightly job that pulls the last two days; it is a no-op
+   while the token is unset, so it starts working the moment you add it.
+
+Syncing writes through the same path as a CSV upload — re-running a date
+replaces it rather than duplicating, so backfills are safe to repeat.
+
+### Square environment variables
+
+| Variable | Description |
+|----------|-------------|
+| `SQUARE_ACCESS_TOKEN` | Production token with `REPORTING_READ`. Unset = syncing disabled |
+| `SQUARE_LOCATION_MAP` | `Square name:App name` pairs, comma separated |
+| `SQUARE_STATION_TYPE` | Restrict to one KDS station (e.g. `expo`) to avoid double counting |
+| `SQUARE_API_BASE` | Defaults to `https://connect.squareup.com/reporting` |
+
+### A note on the on-time metric
+
+The KDS cube ships its own `percent_late` and `tickets_completed_on_time`
+measures, but those score against Square's per-ticket "time due" setting — not
+this app's target. The headline number stays "percent of tickets closed at or
+under `target_seconds`", computed here from the durations, so it remains
+correct when an admin changes the target in Settings.
+
 ## Running the tests
 
 ```bash
