@@ -116,10 +116,26 @@ replaces it rather than duplicating, so backfills and repeated syncs are safe.
 
 ### The scheduled job
 
-`.ebextensions/cron-square-sync.config` runs the sync **every 15 minutes**,
-which is as fresh as the Reporting API gets — most cubes lag about that long.
-Today's numbers appear on the dashboard during service rather than the next
-morning.
+`.ebextensions/cron-square-sync.config` runs the sync **every 15 minutes while
+the stores are open** — 6:30am to 5:45pm Pacific, plus one overnight
+reconcile at 2:15am. That is 47 runs a day. Fifteen minutes is as fresh as
+the Reporting API gets, so today's numbers appear on the dashboard during
+service rather than the next morning.
+
+It keeps running to 5:45pm rather than stopping at a 5pm close on purpose:
+Square's reporting lags about 15 minutes, so the last tickets of the day only
+show up afterwards.
+
+The config also sets the instance clock to `America/Los_Angeles`. EB instances
+run UTC, where the service window is not fixed — 6:30am Pacific is 13:30 UTC
+in summer and 14:30 UTC in winter, and 5pm Pacific falls after midnight UTC.
+A hardcoded UTC schedule would drift an hour twice a year. Setting the zone
+lets the cron lines read in store time and lets DST handle itself.
+
+One side effect: server-clock columns (`users.created_at`,
+`tickets.uploaded_at`, password-reset expiry) become Pacific rather than UTC.
+None of them feed the analysis — ticket times come from Square — so the only
+visible change is a one-off discontinuity in those audit fields.
 
 Two switches guard it, both off by default:
 
@@ -131,10 +147,8 @@ unvalidated station type or location mapping would overwrite good CSV data,
 and on a 15-minute schedule that starts minutes after deploy. `--dry-run`
 and the read-only commands work regardless.
 
-The job syncs yesterday **and** today. That is deliberate: the server runs
-UTC while the stores run Pacific, so from late afternoon the server's "today"
-is already the store's tomorrow. Square's own `local_date` files each ticket
-under the right business day.
+The job syncs yesterday **and** today, which covers the overnight run, a
+missed window, and any ticket Square reports late.
 
 Note that today will be a partial day until close, so it shows fewer tickets
 than a finished one — worth remembering when comparing it on History or
