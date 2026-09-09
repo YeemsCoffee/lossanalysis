@@ -601,6 +601,22 @@ def get_hourly_daily_summary(from_date: str = None, to_date: str = None,
     return rows
 
 
+def count_tickets(from_date: str = None, to_date: str = None,
+                  location: str = None) -> int:
+    """
+    How many tickets a range holds, without loading any of them.
+
+    The ticket-level pages (Loss Drivers) genuinely need every row, so this
+    lets a route find out what it is about to pull and say so, rather than
+    starting work that will outlive the request timeout.
+    """
+    _ensure_schema()
+    where, params = _ticket_filters(from_date, to_date, location)
+    with _get_cursor() as cur:
+        cur.execute(_adapt(f"SELECT COUNT(*) AS n FROM tickets{where}"), params)
+        return int(dict(cur.fetchone())["n"])
+
+
 def get_tickets_df(from_date: str = None, to_date: str = None,
                    location: str = None, target_seconds: int = 294) -> pd.DataFrame:
     """
@@ -618,7 +634,10 @@ def get_tickets_df(from_date: str = None, to_date: str = None,
     if not rows:
         return pd.DataFrame()
 
-    df = pd.DataFrame([dict(r) for r in rows])
+    # Build columnwise. pd.DataFrame(list_of_dicts) re-derives the schema from
+    # every row and is ~3x slower on the row counts the drivers page reaches.
+    columns = list(rows[0].keys())
+    df = pd.DataFrame({k: [r[k] for r in rows] for k in columns})
     df = df.rename(columns={
         "ticket_name":  "Ticket Name",
         "order_source": "Order Source",
