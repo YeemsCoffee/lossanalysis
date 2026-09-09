@@ -11,6 +11,10 @@
   <div class="date">Kitchen ticket trends over time · target {{ target_fmt }}{% if location %} · {{ location }}{% endif %}</div>
 </div>
 
+{% if sync %}
+  {% include "_sync_status.html" %}
+{% endif %}
+
 <!-- Location filter tabs -->
 <div class="location-tabs">
   <a href="{{ url_for('main.history', **({'from': from_date, 'to': to_date} if from_date else {})) }}"
@@ -144,7 +148,7 @@
       </thead>
       <tbody>
         {% for r in rows %}
-          <tr style="cursor:pointer;" onclick="window.location='{{ url_for('main.day', date=r.report_date) }}'">
+          <tr style="cursor:pointer;" onclick="window.location='{{ url_for('main.day', date=r.report_date, **({'location': location} if location else {})) }}'">
             <td><strong style="color:var(--green);">{{ r.report_date }}</strong></td>
             <td>{{ r.total_tickets }}</td>
             <td style="color:var(--green); font-weight:700;">{{ r.on_time_count }}</td>

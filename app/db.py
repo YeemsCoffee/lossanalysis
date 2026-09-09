@@ -6,6 +6,7 @@ Database layer.
 All SQL is written with ? placeholders; _adapt() converts to %s for Postgres.
 """
 
+import json
 import os
 import sqlite3
 import pandas as pd
@@ -237,6 +238,43 @@ def set_setting(key: str, value: str):
     else:
         with _get_cursor() as cur:
             cur.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+
+
+SYNC_STATUS_KEY = "square_last_sync"
+
+
+def record_sync_status(**fields):
+    """
+    Remember how the last Square sync went.
+
+    Stored in settings rather than its own table: it is one row, and this keeps
+    the sync from needing a migration. The point is that a sync which quietly
+    stops working should be visible in the app, not only in a log file on the
+    instance — stale data that still looks current is the failure that costs
+    someone a decision.
+    """
+    fields.setdefault("at", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    set_setting(SYNC_STATUS_KEY, json.dumps(fields))
+
+
+def get_sync_status() -> dict:
+    """The last recorded sync outcome, or {} if one has never run."""
+    raw = get_setting(SYNC_STATUS_KEY)
+    if not raw:
+        return {}
+    try:
+        status = json.loads(raw)
+    except (ValueError, TypeError):
+        return {}
+
+    at = status.get("at")
+    if at:
+        try:
+            delta = datetime.now() - datetime.strptime(at, "%Y-%m-%d %H:%M:%S")
+            status["minutes_ago"] = max(int(delta.total_seconds() // 60), 0)
+        except ValueError:
+            pass
+    return status
 
 
 def get_targets() -> dict:

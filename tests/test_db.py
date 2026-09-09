@@ -243,3 +243,30 @@ def test_hourly_summary_keeps_days_separate(db):
     rows = db.get_hourly_daily_summary(target_seconds=TARGET)
     # One row per (hour, day) so the chart can average across days.
     assert sorted(r["report_date"] for r in rows) == ["2026-09-01", "2026-09-02"]
+
+
+# --- Sync status -------------------------------------------------------------
+
+def test_sync_status_round_trip(db):
+    assert db.get_sync_status() == {}       # nothing recorded yet
+
+    db.record_sync_status(ok=True, tickets=42, days=2, unmapped=[])
+    status = db.get_sync_status()
+    assert status["ok"] is True
+    assert status["tickets"] == 42
+    assert status["minutes_ago"] == 0       # just written
+    assert "at" in status
+
+
+def test_sync_status_keeps_only_the_latest(db):
+    db.record_sync_status(ok=True, tickets=1)
+    db.record_sync_status(ok=False, error="boom")
+    status = db.get_sync_status()
+    assert status["ok"] is False and status["error"] == "boom"
+    assert "tickets" not in status          # fully replaced, not merged
+
+
+def test_sync_status_survives_a_corrupt_value(db):
+    """A bad value must not take the whole page down with it."""
+    db.set_setting(db.SYNC_STATUS_KEY, "not json{")
+    assert db.get_sync_status() == {}

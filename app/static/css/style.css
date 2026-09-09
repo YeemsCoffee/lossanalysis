@@ -617,3 +617,37 @@ tr:hover td { background: var(--cream); }
   border-left: 4px solid var(--green);
 }
 .driver-callout strong { color: inherit; }
+
+/* --- Square sync status ---------------------------------------------------
+   A quiet line on History saying whether the automatic pull is still running.
+   The failure mode worth designing for is silence: stale data that still
+   looks current, so "no sync in a while" is called out as loudly as an error. */
+.sync-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  font-size: 13px;
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+.sync-status .sync-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  margin-top: 6px;
+}
+.sync-status.ok    { background: #f0f5ef; color: #3f5c3b; }
+.sync-status.ok    .sync-dot { background: #2B4628; }
+.sync-status.warn  { background: #fdf6e7; color: #8a6114; }
+.sync-status.warn  .sync-dot { background: #d97706; }
+.sync-status.error { background: #fdeded; color: #9b1c1c; }
+.sync-status.error .sync-dot { background: #dc2626; }
+.sync-detail {
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.85;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}

@@ -8,7 +8,7 @@
 {% block header_action %}
 <div class="header-action">
   {% if from_history %}
-    <a href="{{ url_for('main.history') }}">← History</a>
+    <a href="{{ url_for('main.history', **({'location': location} if location else {})) }}">← History</a>
   {% else %}
     <a href="{{ url_for('main.index') }}">↑ Upload Another</a>
   {% endif %}
@@ -18,8 +18,22 @@
 {% block content %}
 <div class="results-header">
   <h1>Daily Performance</h1>
-  <div class="date">{{ report_date }} · target {{ target_fmt }}</div>
+  {# Name the location explicitly: these figures are for one store or for
+     both, and the difference is not otherwise visible on the page. #}
+  <div class="date">{{ report_date }} · target {{ target_fmt }} ·
+    {% if location %}{{ location }}{% else %}all locations{% endif %}</div>
 </div>
+
+{% if from_history and locations %}
+  <div class="location-tabs">
+    <a href="{{ url_for('main.day', date=iso_date) }}"
+       class="location-tab {% if not location %}active{% endif %}">All</a>
+    {% for loc in locations %}
+      <a href="{{ url_for('main.day', date=iso_date, location=loc) }}"
+         class="location-tab {% if location == loc %}active{% endif %}">{{ loc }}</a>
+    {% endfor %}
+  </div>
+{% endif %}
 
 <!-- Summary stat cards -->
 <div class="stat-grid">

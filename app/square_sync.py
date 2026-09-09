@@ -29,7 +29,7 @@ from datetime import date, timedelta
 import pandas as pd
 
 from . import square_api
-from .db import get_tickets_df, save_day_tickets
+from .db import get_tickets_df, record_sync_status, save_day_tickets
 
 # ---------------------------------------------------------------------------
 # Field names, all in one place.
@@ -219,6 +219,11 @@ def sync_range(from_date, to_date, known_locations, token=None, dry_run=False):
         "days": [], "unmapped_locations": [], "written": 0, "dry_run": dry_run,
     }
     if df.empty:
+        # Still a successful run — a closed day legitimately has no tickets,
+        # and treating that as "no sync" would raise a false alarm.
+        if not dry_run:
+            record_sync_status(ok=True, tickets=0, days=0,
+                               range=f"{from_date} to {to_date}", unmapped=[])
         return summary
 
     unmapped = sorted({str(n) for n in
@@ -235,6 +240,15 @@ def sync_range(from_date, to_date, known_locations, token=None, dry_run=False):
             summary["written"] += len(group)
 
     summary["days"].sort(key=lambda d: (d["date"], d["location"]))
+
+    if not dry_run:
+        record_sync_status(
+            ok=True,
+            tickets=summary["written"],
+            days=len(summary["days"]),
+            range=f"{from_date} to {to_date}",
+            unmapped=summary["unmapped_locations"],
+        )
     return summary
 
 
@@ -503,12 +517,24 @@ def main(argv=None):
         return 0 if res["verdict"] == "match" else 1
 
     if args.command in ("sync", "recent"):
-        if args.command == "sync":
-            summary = sync_range(args.from_date, args.to_date, LOCATIONS,
-                                 dry_run=args.dry_run)
-        else:
-            summary = sync_recent(args.days, LOCATIONS, dry_run=args.dry_run,
-                                  include_today=args.include_today)
+        try:
+            if args.command == "sync":
+                summary = sync_range(args.from_date, args.to_date, LOCATIONS,
+                                     dry_run=args.dry_run)
+            else:
+                summary = sync_recent(args.days, LOCATIONS, dry_run=args.dry_run,
+                                      include_today=args.include_today)
+        except Exception as e:
+            # Record the failure before re-raising. A scheduled sync that starts
+            # failing is invisible otherwise: the app would go on showing the
+            # last good data as though it were current.
+            if not args.dry_run:
+                try:
+                    from .db import record_sync_status
+                    record_sync_status(ok=False, error=f"{type(e).__name__}: {e}"[:300])
+                except Exception:
+                    pass  # never let the bookkeeping hide the real error
+            raise
 
         head = ("Would sync" if summary["dry_run"] else "Synced")
         print(f"\n{head} {summary['tickets']:,} tickets "

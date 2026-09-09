@@ -1,0 +1,46 @@
+{#
+  Whether the Square sync is actually running.
+
+  Three states worth distinguishing, because the dangerous one is not "broken"
+  but "quietly stopped" — the app would otherwise keep showing the last good
+  data as though it were current.
+#}
+{% if not sync.ok %}
+  <div class="sync-status error">
+    <span class="sync-dot"></span>
+    <div>
+      <strong>Square sync is failing.</strong>
+      Last attempt {{ sync.at }}{% if sync.minutes_ago is defined %} ({{ sync.minutes_ago }} min ago){% endif %}.
+      Figures below may be out of date.
+      {% if sync.error %}<div class="sync-detail">{{ sync.error }}</div>{% endif %}
+    </div>
+  </div>
+{% elif sync.stale %}
+  <div class="sync-status warn">
+    <span class="sync-dot"></span>
+    <div>
+      <strong>No sync in {{ sync.minutes_ago }} minutes.</strong>
+      It normally runs every 15 minutes while the stores are open, so today's
+      figures may be behind.
+    </div>
+  </div>
+{% else %}
+  <div class="sync-status ok">
+    <span class="sync-dot"></span>
+    <div>
+      Synced from Square
+      {%- if sync.minutes_ago is defined %}
+        {% if sync.minutes_ago < 1 %} just now
+        {%- elif sync.minutes_ago == 1 %} 1 minute ago
+        {%- else %} {{ sync.minutes_ago }} minutes ago{% endif %}
+      {%- else %} at {{ sync.at }}{% endif %}
+      {%- if sync.tickets %} · {{ "{:,}".format(sync.tickets) }} tickets across {{ sync.days }} day{{ '' if sync.days == 1 else 's' }}{% endif %}
+      {%- if sync.unmapped %}
+        <div class="sync-detail">
+          Skipped unrecognised location{{ '' if sync.unmapped | length == 1 else 's' }}:
+          {{ sync.unmapped | join(', ') }} — set SQUARE_LOCATION_MAP.
+        </div>
+      {% endif %}
+    </div>
+  </div>
+{% endif %}

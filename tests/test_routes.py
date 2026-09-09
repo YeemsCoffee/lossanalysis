@@ -374,3 +374,187 @@ def test_drivers_renders_normally_under_the_limit(client, sqlite_db, monkeypatch
     html = client.get("/drivers?from=2026-09-01&to=2026-09-01").get_data(as_text=True)
     assert "Kitchen Load Threshold" in html
     assert "a lot of tickets" not in html
+
+
+# --- Clicking through from History keeps the location -------------------------
+
+@pytest.fixture
+def two_stores(client, sqlite_db):
+    """Gardena clearly worse than Koreatown, so combining them is visible."""
+    login(client)
+    sqlite_db.save_day_tickets("2026-09-01",
+                               make_tickets("2026-09-01", [OVER] * 8 + [OK] * 2),
+                               "Gardena")          # 20% on target
+    sqlite_db.save_day_tickets("2026-09-01",
+                               make_tickets("2026-09-01", [OK] * 10),
+                               "Koreatown")        # 100% on target
+    return client
+
+
+def test_day_view_honours_the_location_filter(two_stores):
+    gardena = two_stores.get("/day/2026-09-01?location=Gardena").get_data(as_text=True)
+    ktown   = two_stores.get("/day/2026-09-01?location=Koreatown").get_data(as_text=True)
+
+    # 10 tickets each, not 20 — the other store must not be mixed in.
+    assert ">10<" in gardena and ">10<" in ktown
+    assert "20.0%" in gardena, "Gardena's own on-target rate"
+    assert "100.0%" in ktown, "Koreatown's own on-target rate"
+    assert gardena != ktown
+
+
+def test_day_view_matches_the_history_row_that_was_clicked(two_stores, sqlite_db):
+    """
+    The bug this guards: History filtered to one store showed that store's
+    numbers, but clicking the row landed on a page combining both, so the
+    figures disagreed with the row that was clicked.
+    """
+    row = sqlite_db.get_daily_summary("2026-09-01", "2026-09-01",
+                                      location="Gardena")[0]
+    row_pct = round((row["total"] - row["over_count"]) / row["total"] * 100, 1)
+
+    html = two_stores.get("/day/2026-09-01?location=Gardena").get_data(as_text=True)
+    assert f"{row_pct}%" in html, f"day page disagrees with the {row_pct}% row"
+
+
+def test_history_row_link_carries_the_location(two_stores):
+    html = two_stores.get("/history?location=Gardena").get_data(as_text=True)
+    assert "/day/2026-09-01?location=Gardena" in html.replace("&amp;", "&")
+
+
+def test_unfiltered_history_links_to_the_combined_day(two_stores):
+    html = two_stores.get("/history").get_data(as_text=True)
+    assert "/day/2026-09-01'" in html or '/day/2026-09-01"' in html
+    combined = two_stores.get("/day/2026-09-01").get_data(as_text=True)
+    assert ">20<" in combined, "unfiltered day should cover both stores"
+
+
+def test_day_view_names_the_location_it_is_showing(two_stores):
+    """Otherwise there is nothing on the page saying which store it is."""
+    assert "Gardena" in two_stores.get("/day/2026-09-01?location=Gardena").get_data(as_text=True)
+    assert "all locations" in two_stores.get("/day/2026-09-01").get_data(as_text=True)
+
+
+def test_back_link_returns_to_the_filtered_history(two_stores):
+    html = two_stores.get("/day/2026-09-01?location=Gardena").get_data(as_text=True)
+    assert "/history?location=Gardena" in html.replace("&amp;", "&")
+
+
+def test_day_with_no_data_for_that_location_says_so(two_stores, sqlite_db):
+    sqlite_db.save_day_tickets("2026-09-05",
+                               make_tickets("2026-09-05", [OK] * 3), "Gardena")
+    r = two_stores.get("/day/2026-09-05?location=Koreatown", follow_redirects=True)
+    assert b"No data found" in r.data
+    assert b"Koreatown" in r.data
+
+
+def test_bogus_location_is_ignored_not_trusted(two_stores):
+    """A hand-typed location must not filter to nothing or reach the query."""
+    html = two_stores.get("/day/2026-09-01?location=Nowhere").get_data(as_text=True)
+    assert ">20<" in html          # falls back to all locations
+    assert "all locations" in html
+
+
+# --- Is the automatic sync actually running? ----------------------------------
+#
+# The failure worth designing for isn't a loud crash, it's silence: a sync that
+# quietly stops leaves the app showing the last good data as though current.
+
+def test_no_banner_before_syncing_is_set_up(client, sqlite_db):
+    login(client)
+    sqlite_db.save_day_tickets("2026-09-01",
+                               make_tickets("2026-09-01", [OK] * 3), "Gardena")
+    html = client.get("/history").get_data(as_text=True)
+    assert "Synced from Square" not in html
+    assert "sync-status" not in html
+
+
+def test_recent_sync_is_reported(client, sqlite_db):
+    login(client)
+    sqlite_db.save_day_tickets("2026-09-01",
+                               make_tickets("2026-09-01", [OK] * 3), "Gardena")
+    sqlite_db.record_sync_status(ok=True, tickets=120, days=2,
+                                 range="2026-09-01 to 2026-09-02", unmapped=[])
+
+    html = client.get("/history").get_data(as_text=True)
+    assert "Synced from Square" in html
+    assert "120" in html
+    assert "sync-status ok" in html
+
+
+def test_a_failing_sync_is_called_out(client, sqlite_db):
+    login(client)
+    sqlite_db.save_day_tickets("2026-09-01",
+                               make_tickets("2026-09-01", [OK] * 3), "Gardena")
+    sqlite_db.record_sync_status(ok=False,
+                                 error="SquareAuthError: token rejected (401)")
+
+    html = client.get("/history").get_data(as_text=True)
+    assert "Square sync is failing" in html
+    assert "may be out of date" in html
+    assert "401" in html                      # the actual reason, not just "error"
+
+
+def test_a_silent_gap_during_service_is_flagged(client, sqlite_db, monkeypatch):
+    """A sync that stopped two hours ago mid-service is the dangerous case."""
+    import app.routes as routes
+    from datetime import datetime as real_datetime
+
+    login(client)
+    sqlite_db.save_day_tickets("2026-09-01",
+                               make_tickets("2026-09-01", [OK] * 3), "Gardena")
+    old = (real_datetime.now() - __import__("datetime").timedelta(hours=2))
+    sqlite_db.record_sync_status(ok=True, tickets=10, days=1, unmapped=[],
+                                 at=old.strftime("%Y-%m-%d %H:%M:%S"))
+
+    class Midday(real_datetime):
+        @classmethod
+        def now(cls):
+            return real_datetime.now().replace(hour=12)
+    monkeypatch.setattr(routes, "datetime", Midday)
+
+    html = client.get("/history").get_data(as_text=True)
+    assert "No sync in" in html
+    assert "sync-status warn" in html
+
+
+def test_the_same_gap_overnight_is_not_flagged(client, sqlite_db, monkeypatch):
+    """Nothing to pull from a closed kitchen — warning then trains people to ignore it."""
+    import app.routes as routes
+    from datetime import datetime as real_datetime
+
+    login(client)
+    sqlite_db.save_day_tickets("2026-09-01",
+                               make_tickets("2026-09-01", [OK] * 3), "Gardena")
+    old = (real_datetime.now() - __import__("datetime").timedelta(hours=2))
+    sqlite_db.record_sync_status(ok=True, tickets=10, days=1, unmapped=[],
+                                 at=old.strftime("%Y-%m-%d %H:%M:%S"))
+
+    class Midnight(real_datetime):
+        @classmethod
+        def now(cls):
+            return real_datetime.now().replace(hour=2)
+    monkeypatch.setattr(routes, "datetime", Midnight)
+
+    html = client.get("/history").get_data(as_text=True)
+    assert "No sync in" not in html
+
+
+def test_unmapped_locations_are_surfaced(client, sqlite_db):
+    """Tickets silently skipped for an unknown store name need to be visible."""
+    login(client)
+    sqlite_db.save_day_tickets("2026-09-01",
+                               make_tickets("2026-09-01", [OK] * 3), "Gardena")
+    sqlite_db.record_sync_status(ok=True, tickets=50, days=1,
+                                 unmapped=["Yeems Third Store"])
+
+    html = client.get("/history").get_data(as_text=True)
+    assert "Yeems Third Store" in html
+    assert "SQUARE_LOCATION_MAP" in html
+
+
+def test_banner_shows_even_when_there_is_no_data(client, sqlite_db):
+    """An empty History plus a failing sync is exactly when you need to know."""
+    login(client)
+    sqlite_db.record_sync_status(ok=False, error="SquareError: HTTP 500")
+    html = client.get("/history").get_data(as_text=True)
+    assert "Square sync is failing" in html

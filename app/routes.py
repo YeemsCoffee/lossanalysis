@@ -11,7 +11,7 @@ from .analysis import (
 from .db import (
     save_day_tickets, get_tickets_df, get_date_bounds, get_distinct_dates,
     get_daily_summary, get_source_daily_summary, get_hourly_daily_summary,
-    count_tickets,
+    count_tickets, get_sync_status,
     get_user_by_email, update_last_login,
     create_user, list_users, set_user_active, update_user_location,
     create_reset_token, get_valid_reset_token, mark_token_used,
@@ -21,7 +21,7 @@ from .db import (
 import io
 import json
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 bp = Blueprint("main", __name__)
 
@@ -30,6 +30,30 @@ bp = Blueprint("main", __name__)
 # ceiling past which the page asks for a narrower range instead of timing out.
 DRIVER_DEFAULT_DAYS = int(os.environ.get("DRIVER_DEFAULT_DAYS", "30"))
 DRIVER_MAX_TICKETS  = int(os.environ.get("DRIVER_MAX_TICKETS", "50000"))
+
+# The scheduled sync runs every 15 minutes; past this it is worth saying so.
+SYNC_STALE_MINUTES = int(os.environ.get("SYNC_STALE_MINUTES", "45"))
+SERVICE_HOURS      = (6, 18)     # store hours, when a gap actually means something
+
+
+def _sync_banner():
+    """
+    Sync state for the templates, or None when syncing was never set up.
+
+    Only flags staleness during service hours: overnight there is nothing to
+    pull and the last sync is legitimately hours old, so warning then would
+    train people to ignore the banner.
+    """
+    status = get_sync_status()
+    if not status:
+        return None
+    minutes = status.get("minutes_ago")
+    in_service = SERVICE_HOURS[0] <= datetime.now().hour < SERVICE_HOURS[1]
+    status["stale"] = bool(
+        status.get("ok") and in_service
+        and minutes is not None and minutes > SYNC_STALE_MINUTES
+    )
+    return status
 
 
 # ---------------------------------------------------------------------------
@@ -208,12 +232,24 @@ def analyze():
 @login_required
 def day(date):
     targets = get_targets()
-    df = get_tickets_df(from_date=date, to_date=date, target_seconds=targets["target_seconds"])
+    # Carry the location filter through from History. Without it, clicking a
+    # Gardena row landed on a page combining both stores, so the figures
+    # disagreed with the row that was clicked.
+    location = request.args.get("location", "")
+    loc      = location if location in LOCATIONS else None
+
+    df = get_tickets_df(from_date=date, to_date=date, location=loc,
+                        target_seconds=targets["target_seconds"])
     if df.empty:
-        flash(f"No data found for {date}.", "error")
-        return redirect(url_for("main.history"))
-    result = analyze_df(df, target_seconds=targets["target_seconds"], target_pct=targets["target_pct"])
-    return render_template("results.html", **result, iso_date=date, from_history=True)
+        flash(f"No data found for {date}"
+              f"{' at ' + loc if loc else ''}.", "error")
+        return redirect(url_for("main.history", location=location or None))
+
+    result = analyze_df(df, target_seconds=targets["target_seconds"],
+                        target_pct=targets["target_pct"])
+    return render_template("results.html", **result, iso_date=date,
+                           from_history=True, location=loc,
+                           locations=LOCATIONS)
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +267,7 @@ def history():
 
     if not earliest:
         return render_template("history.html", rows=[], charts=None,
+                               sync=_sync_banner(),
                                from_date=None, to_date=None,
                                earliest=None, latest=None,
                                location=location, locations=LOCATIONS,
@@ -248,6 +285,7 @@ def history():
     daily = get_daily_summary(from_date, to_date, location=loc, target_seconds=tgt)
     if not daily:
         return render_template("history.html", rows=[], charts=None,
+                               sync=_sync_banner(),
                                from_date=from_date, to_date=to_date,
                                earliest=earliest, latest=latest,
                                location=location, locations=LOCATIONS,
@@ -391,6 +429,7 @@ def history():
         "history.html",
         rows=rows,
         charts=charts,
+        sync=_sync_banner(),
         from_date=from_date,
         to_date=to_date,
         earliest=earliest,
