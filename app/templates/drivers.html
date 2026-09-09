@@ -21,7 +21,33 @@
   {% endfor %}
 </div>
 
-{% if not drivers %}
+{% if too_many %}
+  <div class="section" style="text-align:center; padding:48px 32px;">
+    <div style="font-size:48px; margin-bottom:16px;">⏳</div>
+    <div style="font-size:18px; font-weight:700; color:var(--green);">That's a lot of tickets</div>
+    <div style="margin-top:10px; color:var(--gray); max-width:520px; margin-left:auto; margin-right:auto;">
+      This range holds <strong>{{ "{:,}".format(too_many) }}</strong> tickets.
+      Unlike the other pages, Loss Drivers examines every ticket individually —
+      that's what makes the clustering and cascade analysis possible — so above
+      about {{ "{:,}".format(max_tickets) }} it would take longer than the page
+      is allowed to wait.
+    </div>
+    <div style="margin-top:16px; color:var(--gray);">Narrow the date range below and try again.</div>
+    <form method="get" action="{{ url_for('main.drivers') }}"
+          style="display:flex; align-items:center; gap:12px; justify-content:center; margin-top:24px; flex-wrap:wrap;">
+      {% if location %}<input type="hidden" name="location" value="{{ location }}">{% endif %}
+      <input type="date" name="from" value="{{ from_date or '' }}"
+             min="{{ earliest or '' }}" max="{{ latest or '' }}"
+             style="padding:7px 10px; border:2px solid var(--gray-light); border-radius:8px; font-family:inherit; font-size:14px;">
+      <span style="color:var(--gray);">to</span>
+      <input type="date" name="to" value="{{ to_date or '' }}"
+             min="{{ earliest or '' }}" max="{{ latest or '' }}"
+             style="padding:7px 10px; border:2px solid var(--gray-light); border-radius:8px; font-family:inherit; font-size:14px;">
+      <button type="submit"
+              style="padding:7px 18px; background:var(--green); color:var(--cream); border:none; border-radius:8px; font-weight:700; font-size:14px; cursor:pointer; font-family:inherit;">Apply</button>
+    </form>
+  </div>
+{% elif not drivers %}
   <div class="section" style="text-align:center; padding:60px; color:var(--gray);">
     <div style="font-size:48px; margin-bottom:16px;">🔍</div>
     <div style="font-size:18px; font-weight:700; color:var(--green);">No data to analyze yet</div>
@@ -72,7 +98,7 @@
 
 <!-- 2. Cascade / domino -->
 <div class="section">
-  <h2>🁢 Cascade Effect (the domino)</h2>
+  <h2>🀢 Cascade Effect (the domino)</h2>
   <div class="section-sub">
     Does falling behind compound? We compare the chance the <em>next</em> ticket goes over depending on whether the current one did.
   </div>
