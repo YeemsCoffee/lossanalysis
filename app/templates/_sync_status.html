@@ -1,11 +1,45 @@
 {#
   Whether the Square sync is actually running.
 
-  Three states worth distinguishing, because the dangerous one is not "broken"
-  but "quietly stopped" — the app would otherwise keep showing the last good
-  data as though it were current.
+  Four states, and the one that matters most is "never" — silence is
+  ambiguous between "not set up" and "set up but quietly died", and the whole
+  point of this line is that stale data should never look current.
+
+  Expects `sync` (possibly None). Admins also get a button to pull now rather
+  than wait for the next quarter hour.
 #}
-{% if not sync.ok %}
+{% set can_sync = current_user.is_authenticated and current_user.is_admin %}
+
+{% macro sync_buttons(label) %}
+  {% if can_sync %}
+    <div class="sync-actions">
+      <form method="post" action="{{ url_for('main.admin_sync') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="next" value="{{ request.full_path }}">
+        <input type="hidden" name="dry_run" value="1">
+        <button type="submit" class="sync-btn ghost">Preview</button>
+      </form>
+      <form method="post" action="{{ url_for('main.admin_sync') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="next" value="{{ request.full_path }}">
+        <button type="submit" class="sync-btn">{{ label }}</button>
+      </form>
+    </div>
+  {% endif %}
+{% endmacro %}
+
+{% if not sync %}
+  <div class="sync-status idle">
+    <span class="sync-dot"></span>
+    <div>
+      <strong>Not syncing from Square yet.</strong>
+      Reports are whatever has been uploaded by hand.
+      {%- if can_sync %} Set SQUARE_ACCESS_TOKEN and SQUARE_SYNC_ENABLED to turn
+      the scheduled pull on, or run one now.{% endif %}
+    </div>
+    {{ sync_buttons("Sync now") }}
+  </div>
+{% elif not sync.ok %}
   <div class="sync-status error">
     <span class="sync-dot"></span>
     <div>
@@ -14,6 +48,7 @@
       Figures below may be out of date.
       {% if sync.error %}<div class="sync-detail">{{ sync.error }}</div>{% endif %}
     </div>
+    {{ sync_buttons("Retry now") }}
   </div>
 {% elif sync.stale %}
   <div class="sync-status warn">
@@ -23,6 +58,7 @@
       It normally runs every 15 minutes while the stores are open, so today's
       figures may be behind.
     </div>
+    {{ sync_buttons("Sync now") }}
   </div>
 {% else %}
   <div class="sync-status ok">
@@ -42,5 +78,6 @@
         </div>
       {% endif %}
     </div>
+    {{ sync_buttons("Sync now") }}
   </div>
 {% endif %}

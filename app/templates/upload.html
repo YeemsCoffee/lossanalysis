@@ -6,11 +6,9 @@
   <p>Upload your daily Square kitchen report to instantly see how many tickets went over target, where the rush clusters happened, and the longest ticket of the day.</p>
 </div>
 
-{% if sync %}
-  <div style="max-width:560px; margin:0 auto 20px;">
-    {% include "_sync_status.html" %}
-  </div>
-{% endif %}
+<div style="max-width:560px; margin:0 auto 20px;">
+  {% include "_sync_status.html" %}
+</div>
 
 <form class="upload-card" method="post" action="{{ url_for('main.analyze') }}" enctype="multipart/form-data" id="upload-form">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

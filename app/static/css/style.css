@@ -651,3 +651,34 @@ tr:hover td { background: var(--cream); }
   opacity: 0.85;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
+
+/* Admin controls inside the sync line. */
+.sync-status.idle  { background: #f3f4f6; color: #4b5563; }
+.sync-status.idle  .sync-dot { background: #9ca3af; }
+.sync-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+  align-items: center;
+}
+.sync-actions form { margin: 0; }
+.sync-btn {
+  padding: 5px 14px;
+  border-radius: 6px;
+  border: none;
+  background: var(--green);
+  color: var(--cream);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.sync-btn.ghost {
+  background: none;
+  border: 1px solid currentColor;
+  color: inherit;
+  opacity: 0.75;
+}
+.sync-btn:hover { opacity: 0.9; }

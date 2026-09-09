@@ -10,6 +10,11 @@ from conftest import login, make_tickets, token_from
 OVER, OK = 400, 100
 
 
+def url_has(html, path):
+    """Match a URL in rendered HTML, ignoring entity escaping."""
+    return path in html.replace("&amp;", "&")
+
+
 def csv_bytes(rows):
     """A CSV shaped like Square's kitchen export."""
     return io.BytesIO(pd.DataFrame(rows).to_csv(index=False).encode())
@@ -459,13 +464,18 @@ def test_bogus_location_is_ignored_not_trusted(two_stores):
 # The failure worth designing for isn't a loud crash, it's silence: a sync that
 # quietly stops leaves the app showing the last good data as though current.
 
-def test_no_banner_before_syncing_is_set_up(client, sqlite_db):
+def test_says_so_when_syncing_was_never_set_up(client, sqlite_db):
+    """
+    Silence used to mean this, and was indistinguishable from a sync that had
+    quietly died. The page should always say where its data comes from.
+    """
     login(client)
     sqlite_db.save_day_tickets("2026-09-01",
                                make_tickets("2026-09-01", [OK] * 3), "Gardena")
     html = client.get("/history").get_data(as_text=True)
+    assert "Not syncing from Square yet" in html
+    assert "sync-status idle" in html
     assert "Synced from Square" not in html
-    assert "sync-status" not in html
 
 
 def test_recent_sync_is_reported(client, sqlite_db):
@@ -580,8 +590,112 @@ def test_upload_page_warns_when_the_sync_is_failing(client, sqlite_db):
     assert "Square sync is failing" in html
 
 
-def test_upload_page_is_unchanged_before_syncing_is_set_up(client):
+def test_upload_page_says_syncing_is_not_set_up(client):
     login(client)
     html = client.get("/").get_data(as_text=True)
-    assert "sync-status" not in html
+    assert "Not syncing from Square yet" in html
     assert "Drop your CSV here" in html      # the page still works normally
+
+
+# --- Sync now button ----------------------------------------------------------
+
+def test_admins_get_sync_buttons(client, sqlite_db):
+    login(client)
+    html = client.get("/").get_data(as_text=True)
+    assert "Sync now" in html and "Preview" in html
+    assert url_has(html, "/admin/sync")
+
+
+def test_managers_do_not_get_sync_buttons(client, sqlite_db):
+    """It writes data, so it stays an admin control."""
+    sqlite_db.create_user("mgr@yeemscoffee.com", "Mgr", "pw12345678", is_admin=False)
+    login(client, email="mgr@yeemscoffee.com")
+    html = client.get("/").get_data(as_text=True)
+    assert "Not syncing from Square yet" in html   # still sees the status
+    assert "Sync now" not in html                  # but not the button
+
+
+def test_manager_cannot_post_a_sync(client, sqlite_db):
+    sqlite_db.create_user("mgr@yeemscoffee.com", "Mgr", "pw12345678", is_admin=False)
+    login(client, email="mgr@yeemscoffee.com")
+    r = client.post("/admin/sync",
+                    data={"csrf_token": token_from(client, "/")})
+    assert r.status_code == 403
+
+
+def test_sync_now_requires_csrf(client):
+    login(client)
+    assert client.post("/admin/sync").status_code == 400
+
+
+def test_sync_now_without_a_token_explains_itself(client, monkeypatch):
+    monkeypatch.delenv("SQUARE_ACCESS_TOKEN", raising=False)
+    login(client)
+    r = client.post("/admin/sync",
+                    data={"csrf_token": token_from(client, "/")},
+                    follow_redirects=True)
+    assert b"No Square access token" in r.data
+
+
+def test_sync_now_reports_what_it_wrote(client, monkeypatch):
+    import app.routes as routes
+    monkeypatch.setenv("SQUARE_ACCESS_TOKEN", "t")
+    login(client)
+
+    import app.square_sync as ss
+    monkeypatch.setattr(ss, "sync_recent", lambda *a, **k: {
+        "tickets": 412, "dry_run": k.get("dry_run", False),
+        "days": [{"date": "2026-09-08", "location": "Gardena", "tickets": 412}],
+        "unmapped_locations": [], "from": "x", "to": "y", "written": 412})
+
+    r = client.post("/admin/sync", data={"csrf_token": token_from(client, "/")},
+                    follow_redirects=True)
+    assert b"Synced 412 tickets" in r.data
+    assert b"2026-09-08 Gardena" in r.data
+
+
+def test_preview_does_not_write(client, monkeypatch):
+    monkeypatch.setenv("SQUARE_ACCESS_TOKEN", "t")
+    login(client)
+
+    import app.square_sync as ss
+    seen = {}
+    monkeypatch.setattr(ss, "sync_recent", lambda *a, **k: seen.update(k) or {
+        "tickets": 5, "dry_run": True, "days": [], "unmapped_locations": [],
+        "from": "x", "to": "y", "written": 0})
+
+    r = client.post("/admin/sync",
+                    data={"csrf_token": token_from(client, "/"), "dry_run": "1"},
+                    follow_redirects=True)
+    assert seen["dry_run"] is True, "preview must not write"
+    assert b"Would sync" in r.data
+
+
+def test_sync_now_surfaces_a_failure_rather_than_500ing(client, monkeypatch):
+    monkeypatch.setenv("SQUARE_ACCESS_TOKEN", "t")
+    login(client)
+
+    import app.square_sync as ss
+    def boom(*a, **k):
+        raise RuntimeError("token rejected (401)")
+    monkeypatch.setattr(ss, "sync_recent", boom)
+
+    r = client.post("/admin/sync", data={"csrf_token": token_from(client, "/")},
+                    follow_redirects=True)
+    assert r.status_code == 200
+    assert b"Square sync failed" in r.data and b"401" in r.data
+
+
+def test_sync_now_warns_about_unmapped_locations(client, monkeypatch):
+    monkeypatch.setenv("SQUARE_ACCESS_TOKEN", "t")
+    login(client)
+
+    import app.square_sync as ss
+    monkeypatch.setattr(ss, "sync_recent", lambda *a, **k: {
+        "tickets": 10, "dry_run": False, "days": [], "written": 10,
+        "unmapped_locations": ["Yeems Third Store"], "from": "x", "to": "y"})
+
+    r = client.post("/admin/sync", data={"csrf_token": token_from(client, "/")},
+                    follow_redirects=True)
+    assert b"Yeems Third Store" in r.data
+    assert b"SQUARE_LOCATION_MAP" in r.data

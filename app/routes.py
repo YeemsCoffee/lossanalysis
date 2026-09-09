@@ -670,6 +670,51 @@ def admin_assign_location():
     return redirect(url_for("main.admin_users"))
 
 
+@bp.route("/admin/sync", methods=["POST"])
+@login_required
+def admin_sync():
+    """
+    Pull from Square now rather than waiting for the next quarter hour.
+
+    Note this deliberately does not require SQUARE_SYNC_ENABLED, which the
+    scheduled job does. That flag guards *unattended* writing — a job that
+    could overwrite good data silently and repeatedly before anyone noticed.
+    An admin pressing a button is attended by definition: it happens once,
+    and the result comes straight back on the next page. The preview button
+    is there to look before leaping.
+    """
+    _require_admin()
+    from .square_sync import sync_recent
+
+    back = request.form.get("next") or url_for("main.index")
+    dry  = request.form.get("dry_run") == "1"
+
+    if not os.environ.get("SQUARE_ACCESS_TOKEN"):
+        flash("No Square access token is set, so there is nothing to sync from. "
+              "Add SQUARE_ACCESS_TOKEN to the environment properties first.",
+              "error")
+        return redirect(back)
+
+    try:
+        summary = sync_recent(2, LOCATIONS, dry_run=dry, include_today=True)
+    except Exception as e:
+        flash(f"Square sync failed: {type(e).__name__}: {e}", "error")
+        return redirect(back)
+
+    days = ", ".join(f"{d['date']} {d['location']} ({d['tickets']})"
+                     for d in summary["days"]) or "no days"
+    verb = "Would sync" if dry else "Synced"
+    flash(f"{verb} {summary['tickets']:,} tickets — {days}.",
+          "info" if dry else "success")
+
+    if summary["unmapped_locations"]:
+        flash("These Square locations were not recognised and were skipped: "
+              + ", ".join(summary["unmapped_locations"])
+              + ". Set SQUARE_LOCATION_MAP to map them.", "error")
+
+    return redirect(back)
+
+
 @bp.route("/admin/settings", methods=["GET", "POST"])
 @login_required
 def admin_settings():
