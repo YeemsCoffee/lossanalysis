@@ -163,6 +163,9 @@ def index():
         locations=LOCATIONS,
         target_fmt=fmt_time(targets["target_seconds"]),
         target_pct=targets["target_pct"],
+        # This is the page a manager lands on. If syncing has quietly died,
+        # here is where they need to learn that uploading is back on them.
+        sync=_sync_banner(),
     )
 
 

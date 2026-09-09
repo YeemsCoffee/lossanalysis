@@ -558,3 +558,30 @@ def test_banner_shows_even_when_there_is_no_data(client, sqlite_db):
     sqlite_db.record_sync_status(ok=False, error="SquareError: HTTP 500")
     html = client.get("/history").get_data(as_text=True)
     assert "Square sync is failing" in html
+
+
+def test_upload_page_shows_the_sync_state(client, sqlite_db):
+    """
+    The page a manager lands on. If syncing died they need to learn it here,
+    where the decision to upload manually actually gets made — not on History,
+    which someone relying on automatic data has no reason to visit.
+    """
+    login(client)
+    sqlite_db.record_sync_status(ok=True, tickets=200, days=2, unmapped=[])
+    html = client.get("/").get_data(as_text=True)
+    assert "Synced from Square" in html
+    assert "200" in html
+
+
+def test_upload_page_warns_when_the_sync_is_failing(client, sqlite_db):
+    login(client)
+    sqlite_db.record_sync_status(ok=False, error="SquareAuthError: 401")
+    html = client.get("/").get_data(as_text=True)
+    assert "Square sync is failing" in html
+
+
+def test_upload_page_is_unchanged_before_syncing_is_set_up(client):
+    login(client)
+    html = client.get("/").get_data(as_text=True)
+    assert "sync-status" not in html
+    assert "Drop your CSV here" in html      # the page still works normally
