@@ -284,3 +284,93 @@ def test_empty_history_invites_an_upload(client):
     login(client)
     html = client.get("/history").get_data(as_text=True)
     assert "Upload a Report" in html
+
+
+# --- Loss Drivers is bounded --------------------------------------------------
+#
+# Unlike History and Patterns, this page needs every ticket row, so its cost
+# grows with the range. Left unbounded it eventually exceeds the request
+# timeout and the browser gets a 504 with nothing useful in the log.
+
+def test_drivers_defaults_to_a_recent_window_not_all_history(client, sqlite_db,
+                                                             monkeypatch):
+    import app.routes as routes
+    monkeypatch.setattr(routes, "DRIVER_DEFAULT_DAYS", 30)
+    login(client)
+
+    # One old day and one recent one.
+    sqlite_db.save_day_tickets("2026-01-01",
+                               make_tickets("2026-01-01", [OK] * 3), "Gardena")
+    sqlite_db.save_day_tickets("2026-09-01",
+                               make_tickets("2026-09-01", [OK] * 4), "Gardena")
+
+    ranges = []
+    real = routes.count_tickets
+    monkeypatch.setattr(routes, "count_tickets",
+                        lambda f, t, location=None: ranges.append((f, t)) or real(f, t, location))
+
+    client.get("/drivers")
+    from_date, to_date = ranges[0]
+    assert to_date == "2026-09-01"
+    assert from_date == "2026-08-03"        # 30 days back from the latest day
+    assert from_date > "2026-01-01", "still reaching back over all history"
+
+
+def test_drivers_honours_an_explicit_range(client, sqlite_db, monkeypatch):
+    """The default is a default, not a cap — the picker still reaches back."""
+    import app.routes as routes
+    login(client)
+    sqlite_db.save_day_tickets("2026-01-01",
+                               make_tickets("2026-01-01", [OK, OVER]), "Gardena")
+
+    r = client.get("/drivers?from=2026-01-01&to=2026-01-01")
+    assert r.status_code == 200
+    assert b"Kitchen Load Threshold" in r.data
+
+
+def test_drivers_asks_for_a_narrower_range_instead_of_timing_out(client, sqlite_db,
+                                                                 monkeypatch):
+    import app.routes as routes
+    monkeypatch.setattr(routes, "DRIVER_MAX_TICKETS", 5)
+    login(client)
+    sqlite_db.save_day_tickets("2026-09-01",
+                               make_tickets("2026-09-01", [OK] * 20), "Gardena")
+
+    r = client.get("/drivers?from=2026-09-01&to=2026-09-01")
+    assert r.status_code == 200
+    html = r.get_data(as_text=True)
+    assert "That&#39;s a lot of tickets" in html or "a lot of tickets" in html
+    assert "20" in html                       # tells them the actual count
+    # And it must not have attempted the analysis.
+    assert "Kitchen Load Threshold" not in html
+
+
+def test_drivers_does_not_load_tickets_when_over_the_limit(client, sqlite_db,
+                                                           monkeypatch):
+    """The guard has to run before the expensive load, or it saves nothing."""
+    import app.routes as routes
+    monkeypatch.setattr(routes, "DRIVER_MAX_TICKETS", 5)
+    login(client)
+    sqlite_db.save_day_tickets("2026-09-01",
+                               make_tickets("2026-09-01", [OK] * 20), "Gardena")
+
+    loaded = []
+    monkeypatch.setattr(routes, "get_tickets_df",
+                        lambda *a, **k: loaded.append(1) or (_ for _ in ()).throw(
+                            AssertionError("tickets were loaded despite the guard")))
+
+    assert client.get("/drivers?from=2026-09-01&to=2026-09-01").status_code == 200
+    assert loaded == []
+
+
+def test_drivers_renders_normally_under_the_limit(client, sqlite_db, monkeypatch):
+    import app.routes as routes
+    monkeypatch.setattr(routes, "DRIVER_MAX_TICKETS", 500)
+    login(client)
+    sqlite_db.save_day_tickets("2026-09-01",
+                               make_tickets("2026-09-01", [OK] * 6 + [OVER] * 4),
+                               "Gardena")
+
+    html = client.get("/drivers?from=2026-09-01&to=2026-09-01").get_data(as_text=True)
+    assert "Kitchen Load Threshold" in html
+    assert "a lot of tickets" not in html
