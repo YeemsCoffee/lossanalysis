@@ -57,6 +57,51 @@ Leave `DATABASE_URL` unset (or empty) to use local SQLite (`history.db`).
 Without `SECRET_KEY`, the app refuses to start when `DATABASE_URL` is set —
 session cookies signed with a known key would be forgeable.
 
+## Serving over HTTPS
+
+The app speaks plain HTTP; TLS is terminated by CloudFront (or an ALB) in
+front of it. Set `BEHIND_HTTPS_PROXY=1` once that is in place. Without it
+three things fail quietly:
+
+- password-reset links, built with `_external=True`, come out as `http://`
+- and carry the origin's hostname rather than the one the manager typed
+- the session cookie is never marked `Secure`, so a browser will send it
+  over a plain HTTP request
+
+The flag turns on `ProxyFix` so Flask reads `X-Forwarded-Proto` and
+`X-Forwarded-Host`. It is deliberately opt-in: trusting those headers with no
+proxy in front would let a client claim its own scheme and hostname.
+
+### CloudFront setup
+
+The certificate **must be issued in us-east-1** — CloudFront only reads
+certificates from that region, regardless of where the app runs.
+
+1. **ACM (us-east-1)** → request a public certificate for
+   `lossanalysis.yeemscoffee.com`, validate by DNS, add the CNAME it gives you
+   to Square DNS.
+2. **CloudFront** → create a distribution:
+   - Origin domain: the `*.elasticbeanstalk.com` hostname
+   - Protocol: **HTTP only** (the origin has no certificate of its own)
+   - Response timeout: **60s** — the default 30s is below the app's own limits
+   - Viewer protocol policy: **Redirect HTTP to HTTPS**
+   - Allowed methods: **GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE** —
+     the default is read-only and would break login and uploads
+   - Cache policy: **CachingDisabled**
+   - Origin request policy: **AllViewer**
+   - Alternate domain name: `lossanalysis.yeemscoffee.com`, with the ACM cert
+3. **Square DNS** → CNAME `lossanalysis` to the `*.cloudfront.net` hostname.
+4. **Elastic Beanstalk** → add `BEHIND_HTTPS_PROXY=1` to the environment
+   properties.
+
+`CachingDisabled` matters more than it looks: this app renders per-user pages
+behind a login, and a caching distribution would serve one manager's session
+to another.
+
+What this does not cover: the hop from CloudFront to the instance stays
+unencrypted. It protects the leg that is actually exposed — a manager on café
+wifi — but an ALB with an HTTPS listener would encrypt the whole path.
+
 ## Automatic sync from Square
 
 Kitchen ticket times can be pulled from Square's Reporting API instead of
