@@ -11,6 +11,7 @@ from .analysis import (
 from .db import (
     save_day_tickets, get_tickets_df, get_date_bounds, get_distinct_dates,
     get_daily_summary, get_source_daily_summary, get_hourly_daily_summary,
+    count_tickets,
     get_user_by_email, update_last_login,
     create_user, list_users, set_user_active, update_user_location,
     create_reset_token, get_valid_reset_token, mark_token_used,
@@ -19,8 +20,16 @@ from .db import (
 )
 import io
 import json
+import os
+from datetime import date, timedelta
 
 bp = Blueprint("main", __name__)
+
+# Loss Drivers works on individual tickets rather than daily aggregates, so its
+# cost scales with the range. These bound it: a recent default window, and a
+# ceiling past which the page asks for a narrower range instead of timing out.
+DRIVER_DEFAULT_DAYS = int(os.environ.get("DRIVER_DEFAULT_DAYS", "30"))
+DRIVER_MAX_TICKETS  = int(os.environ.get("DRIVER_MAX_TICKETS", "50000"))
 
 
 # ---------------------------------------------------------------------------
@@ -422,10 +431,29 @@ def drivers():
                                location=location, locations=LOCATIONS,
                                target_fmt=target_fmt, target_pct=target_pct)
 
-    from_date = request.args.get("from", earliest)
+    # Unlike History and Patterns, these analyses need every ticket row, so the
+    # work grows with the range. Default to a recent window rather than all of
+    # history: unbounded, it eventually outgrows the request timeout, and
+    # "what is driving losses" is a question about the current state of the
+    # kitchen anyway. The picker still reaches back as far as the data goes.
+    default_from = (date.fromisoformat(latest)
+                    - timedelta(days=DRIVER_DEFAULT_DAYS - 1)).isoformat()
+    from_date = request.args.get("from", max(default_from, earliest))
     to_date   = request.args.get("to",   latest)
+    loc       = location if location else None
 
-    df = get_tickets_df(from_date, to_date, location=location if location else None,
+    # Find out what this range holds before pulling it, so an over-wide range
+    # explains itself instead of dying at the gateway.
+    ticket_count = count_tickets(from_date, to_date, location=loc)
+    if ticket_count > DRIVER_MAX_TICKETS:
+        return render_template("drivers.html", drivers=None,
+                               too_many=ticket_count, max_tickets=DRIVER_MAX_TICKETS,
+                               from_date=from_date, to_date=to_date,
+                               earliest=earliest, latest=latest,
+                               location=location, locations=LOCATIONS,
+                               target_fmt=target_fmt, target_pct=target_pct)
+
+    df = get_tickets_df(from_date, to_date, location=loc,
                         target_seconds=targets["target_seconds"])
     if df.empty:
         return render_template("drivers.html", drivers=None,
