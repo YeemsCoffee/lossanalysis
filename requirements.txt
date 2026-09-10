@@ -6,3 +6,7 @@ gunicorn>=21.0
 psycopg2-binary>=2.9
 flask-login>=0.6
 boto3>=1.34
+# Square reports UTC and the app displays store time, so the sync needs a zone
+# database. Amazon Linux ships one, but a slim container may not, and without
+# it every sync fails rather than degrading.
+tzdata>=2024.1

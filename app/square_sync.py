@@ -67,6 +67,12 @@ class KDS:
 # CSV turns out to match prep instead — validate_against_csv() will say.
 STATION_TYPE = os.environ.get("SQUARE_STATION_TYPE", "").strip()
 
+# Square reports timestamps in UTC. Everything downstream — the clock times on
+# the report, the hour-of-day charts, the business day a ticket falls on — is
+# in store time, and the database columns are naive strings with no zone to
+# say which. So convert here, once, and store store-time throughout.
+STORE_TZ = os.environ.get("STORE_TIMEZONE", "America/Los_Angeles").strip()
+
 # How far back a catch-up run may reach. There is roughly two years of KDS
 # history, and a cold start that tried to pull all of it on a 15-minute
 # schedule would time out and retry forever. Past this the run says so
@@ -157,6 +163,31 @@ def _items_by_ticket(item_rows):
     return {k: ", ".join(v) for k, v in grouped.items()}
 
 
+def _to_store_time(values):
+    """
+    Parse Square's UTC timestamps and return them as naive store-local times.
+
+    tz_convert before tz_localize(None) is the whole point. Dropping the zone
+    straight off a UTC timestamp keeps the UTC clock reading, which during
+    Pacific daylight time puts a 9am ticket at 4pm — times that have not
+    happened yet — and shifts every hour-of-day chart by seven hours.
+
+    Naive rather than tz-aware because the tickets table stores plain strings
+    and the CSV path has always written store time; a tz-aware column here
+    would make Square rows and uploaded rows incomparable.
+    """
+    parsed = pd.to_datetime(values, format="ISO8601", utc=True)
+    try:
+        converted = parsed.dt.tz_convert(STORE_TZ)
+    except Exception as e:
+        # Storing UTC as though it were store time is the bug this function
+        # exists to prevent, so refuse rather than fall back to it.
+        raise ValueError(
+            f"STORE_TIMEZONE={STORE_TZ!r} is not a timezone this system knows "
+            f"({type(e).__name__}). Use a name like 'America/Los_Angeles'.") from e
+    return converted.dt.tz_localize(None)
+
+
 def rows_to_df(ticket_rows, item_rows, known_locations) -> pd.DataFrame:
     """
     Turn raw KDS rows into the DataFrame shape parse_report() produces, so it
@@ -193,10 +224,8 @@ def rows_to_df(ticket_rows, item_rows, known_locations) -> pd.DataFrame:
         return pd.DataFrame()
 
     df = pd.DataFrame(records)
-    df["Time Created"]   = pd.to_datetime(df["Time Created"], format="ISO8601",
-                                          utc=True).dt.tz_localize(None)
-    df["Time Completed"] = pd.to_datetime(df["Time Completed"], format="ISO8601",
-                                          utc=True).dt.tz_localize(None)
+    df["Time Created"]   = _to_store_time(df["Time Created"])
+    df["Time Completed"] = _to_store_time(df["Time Completed"])
     df["location"] = df["square_location"].map(
         lambda n: map_location(n, known_locations))
     # Prefer Square's local_date: it already accounts for the store's timezone

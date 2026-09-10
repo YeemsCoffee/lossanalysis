@@ -452,6 +452,71 @@ def test_a_malformed_stored_date_does_not_break_the_sync(
     assert fixed_today == {"from_": "2026-08-26", "to": "2026-09-08"}
 
 
+# ---------------------------------------------------------------------------
+# Time zones
+# ---------------------------------------------------------------------------
+
+def test_utc_timestamps_become_store_local_clock_times():
+    """
+    Square reports UTC; every page reads these as store time.
+
+    Dropping the zone without converting kept the UTC reading, so a 9am
+    ticket showed as 4pm — a time that had not happened yet.
+    """
+    row = ticket_row("morning", 300.0, date="2026-09-10",
+                     created="2026-09-10T16:00:00Z",       # 9:00 PDT
+                     completed="2026-09-10T16:05:00Z")
+    df = square_sync.rows_to_df([row], [], LOCATIONS)
+    assert str(df.iloc[0]["Time Created"])   == "2026-09-10 09:00:00"
+    assert str(df.iloc[0]["Time Completed"]) == "2026-09-10 09:05:00"
+
+
+def test_the_hour_used_by_the_charts_is_the_store_hour():
+    """The hour-of-day charts were shifted by the whole UTC offset."""
+    row = ticket_row("rush", 300.0, date="2026-09-10",
+                     created="2026-09-10T15:30:00Z",       # 8:30 PDT
+                     completed="2026-09-10T15:35:00Z")
+    df = square_sync.rows_to_df([row], [], LOCATIONS)
+    assert df.iloc[0]["Time Created"].hour == 8
+
+
+def test_daylight_saving_offset_is_not_hardcoded():
+    """Pacific is UTC-7 in September and UTC-8 in January."""
+    summer = square_sync.rows_to_df(
+        [ticket_row("s", 300.0, date="2026-09-10",
+                    created="2026-09-10T17:00:00Z",
+                    completed="2026-09-10T17:05:00Z")], [], LOCATIONS)
+    winter = square_sync.rows_to_df(
+        [ticket_row("w", 300.0, date="2026-01-10",
+                    created="2026-01-10T17:00:00Z",
+                    completed="2026-01-10T17:05:00Z")], [], LOCATIONS)
+    assert summer.iloc[0]["Time Created"].hour == 10   # PDT, UTC-7
+    assert winter.iloc[0]["Time Created"].hour == 9    # PST, UTC-8
+
+
+def test_store_timezone_is_configurable(monkeypatch):
+    monkeypatch.setattr(square_sync, "STORE_TZ", "America/New_York")
+    df = square_sync.rows_to_df(
+        [ticket_row("e", 300.0, date="2026-09-10",
+                    created="2026-09-10T16:00:00Z",
+                    completed="2026-09-10T16:05:00Z")], [], LOCATIONS)
+    assert df.iloc[0]["Time Created"].hour == 12       # EDT, UTC-4
+
+
+def test_a_synced_ticket_is_never_in_the_future():
+    """The symptom that started this: today's tickets dated hours ahead."""
+    import datetime as dt
+    now = dt.datetime.now(dt.timezone.utc)
+    stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    df = square_sync.rows_to_df(
+        [ticket_row("now", 300.0, date=now.date().isoformat(),
+                    created=stamp, completed=stamp)], [], LOCATIONS)
+
+    from zoneinfo import ZoneInfo
+    store_now = now.astimezone(ZoneInfo(square_sync.STORE_TZ)).replace(tzinfo=None)
+    assert df.iloc[0]["Time Created"] <= store_now
+
+
 def test_evening_pacific_ticket_lands_on_the_right_business_day():
     """
     18:30 Pacific on Sep 7 is 01:30 UTC on Sep 8. Square's local_date says
@@ -538,3 +603,10 @@ def test_validate_does_not_need_the_enable_flag(square, monkeypatch):
 
     square_sync.main(["validate", "2026-09-01"])
     assert called == [1]
+
+
+def test_a_bad_timezone_name_fails_loudly(monkeypatch):
+    """Silently falling back to UTC would reintroduce the future-times bug."""
+    monkeypatch.setattr(square_sync, "STORE_TZ", "Mars/Olympus_Mons")
+    with pytest.raises(ValueError, match="STORE_TIMEZONE"):
+        square_sync.rows_to_df([ticket_row("x", 300.0)], [], LOCATIONS)
