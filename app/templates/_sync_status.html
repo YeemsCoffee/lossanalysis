@@ -39,6 +39,17 @@
     </div>
     {{ sync_buttons("Sync now") }}
   </div>
+{% elif sync.blocked %}
+  <div class="sync-status warn">
+    <span class="sync-dot"></span>
+    <div>
+      <strong>The scheduled sync is running but not writing.</strong>
+      It last ran {{ sync.at }}{% if sync.minutes_ago is defined %} ({{ sync.minutes_ago }} min ago){% endif %}
+      and stopped because SQUARE_SYNC_ENABLED is not set on the environment.
+      Figures below are whatever was last uploaded or synced.
+    </div>
+    {{ sync_buttons("Sync now") }}
+  </div>
 {% elif not sync.ok %}
   <div class="sync-status error">
     <span class="sync-dot"></span>

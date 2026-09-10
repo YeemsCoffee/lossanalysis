@@ -556,6 +556,17 @@ def main(argv=None):
                   "Run `validate <date>` against a day you uploaded by CSV "
                   "first, then set SQUARE_SYNC_ENABLED=1 to arm the sync.\n"
                   "(`--dry-run` works without it.)")
+            # Leave a mark. Returning quietly makes a schedule that is running
+            # perfectly but not allowed to write look exactly like a schedule
+            # that has stopped running, and the only difference visible in the
+            # app is the same slowly-growing "no sync in N minutes".
+            try:
+                record_sync_status(
+                    ok=False, blocked=True,
+                    error="The scheduled sync ran but SQUARE_SYNC_ENABLED is "
+                          "not set, so it wrote nothing.")
+            except Exception as bookkeeping_error:
+                print(f"(could not record sync status: {bookkeeping_error})")
             return 0
 
     if args.command == "check":
@@ -625,10 +636,11 @@ def main(argv=None):
             # last good data as though it were current.
             if not args.dry_run:
                 try:
-                    from .db import record_sync_status
                     record_sync_status(ok=False, error=f"{type(e).__name__}: {e}"[:300])
-                except Exception:
-                    pass  # never let the bookkeeping hide the real error
+                except Exception as bookkeeping_error:
+                    # Never let this hide the real error, but do not swallow it
+                    # silently either — that cost an hour once already.
+                    print(f"(could not record sync status: {bookkeeping_error})")
             raise
 
         head = ("Would sync" if summary["dry_run"] else "Synced")

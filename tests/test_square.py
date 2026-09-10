@@ -610,3 +610,35 @@ def test_a_bad_timezone_name_fails_loudly(monkeypatch):
     monkeypatch.setattr(square_sync, "STORE_TZ", "Mars/Olympus_Mons")
     with pytest.raises(ValueError, match="STORE_TIMEZONE"):
         square_sync.rows_to_df([ticket_row("x", 300.0)], [], LOCATIONS)
+
+
+def test_a_refused_sync_records_that_it_ran(square, monkeypatch):
+    """
+    A schedule that runs but cannot write must not look like one that stopped.
+
+    Both used to surface as the same slowly-growing "no sync in N minutes",
+    which points at cron when the real fix is one environment variable.
+    """
+    monkeypatch.delenv("SQUARE_SYNC_ENABLED", raising=False)
+    recorded = {}
+    monkeypatch.setattr(square_sync, "record_sync_status",
+                        lambda **kw: recorded.update(kw))
+
+    assert square_sync.main(["recent", "--days", "2"]) == 0
+    assert recorded["blocked"] is True
+    assert recorded["ok"] is False
+    assert "SQUARE_SYNC_ENABLED" in recorded["error"]
+
+
+def test_a_dry_run_records_nothing(square, monkeypatch):
+    """Preview must not overwrite the real sync's status."""
+    monkeypatch.delenv("SQUARE_SYNC_ENABLED", raising=False)
+    recorded = []
+    monkeypatch.setattr(square_sync, "record_sync_status",
+                        lambda **kw: recorded.append(kw))
+    monkeypatch.setattr(square_sync, "sync_recent", lambda *a, **k: {
+        "dry_run": True, "tickets": 0, "days": [], "from": "x", "to": "y",
+        "unmapped_locations": []})
+
+    square_sync.main(["recent", "--days", "2", "--dry-run"])
+    assert recorded == []
