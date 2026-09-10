@@ -223,6 +223,10 @@ def _migrate_add_location_columns():
 
 def get_setting(key: str, default: str = None) -> str:
     """Get a single setting value."""
+    # Settings are often the first thing touched on a fresh database — the CLI
+    # reads the target before it reads a ticket — so this cannot assume the
+    # schema is already there the way a ticket query can.
+    _ensure_schema()
     with _get_cursor() as cur:
         cur.execute(_adapt("SELECT value FROM settings WHERE key = ?"), (key,))
         row = cur.fetchone()
@@ -231,6 +235,7 @@ def get_setting(key: str, default: str = None) -> str:
 
 def set_setting(key: str, value: str):
     """Upsert a setting value."""
+    _ensure_schema()
     if IS_POSTGRES:
         sql = "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
         with _get_cursor() as cur:

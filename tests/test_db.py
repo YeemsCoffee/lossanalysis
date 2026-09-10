@@ -37,6 +37,25 @@ def test_ensure_schema_recreates_when_boot_init_failed(db):
     assert db._schema_ready is True
 
 
+def test_settings_work_on_a_database_with_no_tables(db):
+    """A settings read can be the first thing that ever touches the database.
+
+    The sync CLI reads the target before it reads a ticket, so get_setting
+    cannot assume some earlier query already built the schema.
+    """
+    with db._get_cursor() as cur:
+        cur.execute("DROP TABLE IF EXISTS settings")
+    db._schema_ready = False
+
+    assert db.get_targets()["target_seconds"] == 294   # must not raise
+
+    db._schema_ready = False
+    with db._get_cursor() as cur:
+        cur.execute("DROP TABLE IF EXISTS settings")
+    db.set_setting("target_seconds", "300")            # nor on the write path
+    assert db.get_targets()["target_seconds"] == 300
+
+
 # --- users -------------------------------------------------------------------
 
 def test_user_round_trip(db):
