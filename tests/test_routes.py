@@ -699,3 +699,77 @@ def test_sync_now_warns_about_unmapped_locations(client, monkeypatch):
                     follow_redirects=True)
     assert b"Yeems Third Store" in r.data
     assert b"SQUARE_LOCATION_MAP" in r.data
+
+
+# --- excluded items ----------------------------------------------------------
+
+def _csv_with_prep():
+    """Three real orders and two off-hours cream batches, as Square exports."""
+    rows = ["Ticket Name,Order Source,Number of Items,Items in Ticket,"
+            "Completion Time (seconds),Time Created,Time Completed,Device Name"]
+    for i, (items, secs, hh) in enumerate([
+            ("Latte, Bagel", 100, "09"), ("Cortado", 200, "09"),
+            ("Drip Coffee", 300, "10"),
+            ("Sweet Cream Batch", 3000, "04"), ("Cream Prep", 3600, "05")]):
+        rows.append(f"T{i},Register,2,\"{items}\",{secs},"
+                    f"2026-09-01 {hh}:0{i}:00,2026-09-01 {hh}:3{i}:00,KDS1")
+    return "\n".join(rows).encode()
+
+
+def test_upload_report_and_history_agree_about_exclusions(client, sqlite_db):
+    """
+    The post-upload report is built from the file, History from SQL.
+    If the two filters disagreed, the same day would show two answers.
+    """
+    login(client)
+    sqlite_db.set_setting(sqlite_db.EXCLUDED_ITEMS_KEY, "cream")
+
+    page = client.post("/analyze", data={
+        "csrf_token": token_from(client, "/"),
+        "location": "Gardena",
+        "report": (io.BytesIO(_csv_with_prep()), "day.csv"),
+    }, content_type="multipart/form-data", follow_redirects=True)
+    html = page.get_data(as_text=True)
+
+    # 3 real orders, not 5 — the two cream batches are gone from the report...
+    assert ">3<" in html
+    # ...and the longest ticket is the 300s drip, not the 3600s cream batch.
+    assert "60:00" not in html
+
+    # ...and the stored day agrees.
+    assert sqlite_db.get_daily_summary()[0]["total"] == 3
+    # while both prep rows are still on file, so the rule can be changed back.
+    assert sqlite_db.get_excluded_ticket_summary(["cream"])["count"] == 2
+
+
+def test_settings_page_previews_a_rule_without_saving_it(client, sqlite_db):
+    login(client)
+    sqlite_db.save_day_tickets(
+        "2026-09-01", make_tickets("2026-09-01", [100], items="Sweet Cream"),
+        "Gardena")
+
+    page = client.post("/admin/settings", data={
+        "csrf_token": token_from(client, "/admin/settings"),
+        "action": "preview", "excluded_items": "cream",
+    }, follow_redirects=True)
+    html = page.get_data(as_text=True)
+
+    assert "Would exclude" in html and "Sweet Cream" in html
+    # Preview must not change what anyone else sees.
+    assert sqlite_db.get_excluded_item_keywords() == []
+    assert len(sqlite_db.get_tickets_df()) == 1
+
+
+def test_saving_exclusions_changes_the_numbers(client, sqlite_db):
+    login(client)
+    sqlite_db.save_day_tickets(
+        "2026-09-01", make_tickets("2026-09-01", [100], items="Sweet Cream"),
+        "Gardena")
+
+    client.post("/admin/settings", data={
+        "csrf_token": token_from(client, "/admin/settings"),
+        "action": "exclusions", "excluded_items": "cream",
+    }, follow_redirects=True)
+
+    assert sqlite_db.get_excluded_item_keywords() == ["cream"]
+    assert sqlite_db.get_tickets_df().empty

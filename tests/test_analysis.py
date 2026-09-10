@@ -130,3 +130,30 @@ def test_analyze_df_cluster_pct_of_day():
     df = make_tickets("2026-09-01", [OVER] * 3 + [OK] * 7)
     out = analyze_df(df, target_seconds=TARGET, target_pct=85)
     assert out["clusters"][0]["pct_of_day"] == 30.0
+
+
+# --- excluded items ----------------------------------------------------------
+
+def test_drop_excluded_items_matches_the_sql_definition():
+    """
+    The post-upload report filters a DataFrame; every other page filters in
+    SQL. Two definitions would make the same day show two sets of numbers.
+    """
+    from app.analysis import drop_excluded_items
+
+    df = make_tickets("2026-09-01", [100, 200, 300],
+                      items=["Latte, Bagel", "Sweet Cream Batch", "CREAM prep"])
+    kept = drop_excluded_items(df, ["cream"])
+    assert list(kept["Items in Ticket"]) == ["Latte, Bagel"]
+
+
+def test_drop_excluded_items_without_keywords_is_a_noop():
+    from app.analysis import drop_excluded_items
+    df = make_tickets("2026-09-01", [100, 200])
+    assert len(drop_excluded_items(df, [])) == 2
+
+
+def test_drop_excluded_items_leaves_blank_item_lists_alone():
+    from app.analysis import drop_excluded_items
+    df = make_tickets("2026-09-01", [100], items="")
+    assert len(drop_excluded_items(df, ["cream"])) == 1

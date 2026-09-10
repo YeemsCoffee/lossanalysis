@@ -40,6 +40,22 @@ def percentile_seconds(durations, q=90):
     return values[rank - 1]
 
 
+def drop_excluded_items(df, keywords):
+    """
+    Drop tickets whose items match any keyword — prep work, not customer orders.
+
+    The DataFrame twin of db._exclusion_clause(), for the report shown straight
+    after an upload, which is built from the parsed file rather than from a
+    query. Without it that report would count tickets the History page does
+    not, and the same day would show two different numbers.
+    """
+    if df.empty or not keywords:
+        return df
+    items = df["Items in Ticket"].fillna("").astype(str).str.lower()
+    keep = ~items.apply(lambda s: any(k in s for k in keywords))
+    return df[keep]
+
+
 def fmt_clock(ts):
     return ts.strftime("%I:%M %p").lstrip("0")
 

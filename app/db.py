@@ -532,8 +532,42 @@ def save_day_tickets(report_date: str, df: pd.DataFrame, location: str = None):
             cur.executemany(insert_sql, rows)
 
 
+EXCLUDED_ITEMS_KEY = "excluded_item_keywords"
+
+
+def get_excluded_item_keywords() -> list:
+    """
+    Item-name fragments that mark a ticket as not a customer order.
+
+    Prep work that runs through the kitchen display — making creams at
+    Gardena before open — is a real ticket to Square but not a real order,
+    and counting it drags the day's numbers around.
+    """
+    raw = get_setting(EXCLUDED_ITEMS_KEY, "") or ""
+    return [k.strip().lower() for k in raw.split(",") if k.strip()]
+
+
+def _exclusion_clause(keywords) -> tuple:
+    """
+    SQL rejecting tickets whose items match any keyword. Returns (sql, params).
+
+    Applied at query time rather than stamped on the row at import, so
+    changing the rule re-scores every day at once — no re-sync, no
+    re-upload, and no chance of the flag disagreeing with the current rule.
+
+    LOWER() on both sides because LIKE is case-insensitive on SQLite and
+    case-sensitive on Postgres, and a rule that worked locally but not in
+    production would be a nasty thing to discover from a dashboard.
+    """
+    if not keywords:
+        return "", []
+    # COALESCE: a ticket with no items recorded is a real ticket, not a match.
+    terms = " OR ".join(["LOWER(COALESCE(items, '')) LIKE ?"] * len(keywords))
+    return f"NOT ({terms})", [f"%{k}%" for k in keywords]
+
+
 def _ticket_filters(from_date: str = None, to_date: str = None,
-                    location: str = None) -> tuple:
+                    location: str = None, include_excluded: bool = False) -> tuple:
     """Build the shared WHERE clause for ticket queries. Returns (sql, params)."""
     conditions, params = [], []
     if from_date:
@@ -545,6 +579,11 @@ def _ticket_filters(from_date: str = None, to_date: str = None,
     if location:
         conditions.append("location = ?")
         params.append(location)
+    if not include_excluded:
+        clause, kw_params = _exclusion_clause(get_excluded_item_keywords())
+        if clause:
+            conditions.append(clause)
+            params.extend(kw_params)
     where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
     return where, params
 
@@ -769,6 +808,41 @@ def get_tickets_df(from_date: str = None, to_date: str = None,
     df["source"]         = df["Order Source"].str.strip()
 
     return df
+
+
+def get_excluded_ticket_summary(keywords=None, limit: int = 25) -> dict:
+    """
+    What the exclusion rule is currently throwing away.
+
+    A rule you cannot see the effect of is a rule you cannot trust, so the
+    settings page shows the count and a sample before anyone relies on the
+    numbers it changes. Takes keywords so an admin can preview a rule they
+    have typed but not yet saved.
+    """
+    if keywords is None:
+        keywords = get_excluded_item_keywords()
+    if not keywords:
+        return {"count": 0, "sample": [], "keywords": []}
+
+    _ensure_schema()
+    clause, params = _exclusion_clause(keywords)
+    # _exclusion_clause says what to keep; here we want what it removes.
+    where = f" WHERE NOT ({clause})"
+
+    with _get_cursor() as cur:
+        cur.execute(_adapt(f"SELECT COUNT(*) AS n FROM tickets{where}"), params)
+        count = int(dict(cur.fetchone())["n"] or 0)
+
+        cur.execute(_adapt(f"""
+            SELECT report_date, location, ticket_name, items, duration,
+                   time_created
+              FROM tickets{where}
+          ORDER BY report_date DESC, time_created DESC
+             LIMIT {int(limit)}
+        """), params)
+        sample = [dict(r) for r in cur.fetchall()]
+
+    return {"count": count, "sample": sample, "keywords": list(keywords)}
 
 
 def get_date_bounds() -> tuple:

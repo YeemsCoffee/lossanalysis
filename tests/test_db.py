@@ -360,3 +360,94 @@ def test_percentile_group_by_is_whitelisted(db):
     """It goes straight into the SQL string, so it cannot be caller-supplied."""
     with pytest.raises(ValueError):
         db.get_duration_percentile(group_by="duration; DROP TABLE tickets")
+
+
+# --- excluded items ----------------------------------------------------------
+
+def _prep_and_orders(db):
+    """A day mixing real orders with off-hours cream prep."""
+    orders = make_tickets("2026-09-01", [100, 200, 300], items="Latte, Bagel")
+    prep   = make_tickets("2026-09-01", [3000, 3600], items="Sweet Cream Batch",
+                          hour=4, start_minute=30)
+    df = pd.concat([orders, prep], ignore_index=True)
+    db.save_day_tickets("2026-09-01", df, "Gardena")
+
+
+def test_no_keywords_means_nothing_is_excluded(db):
+    _prep_and_orders(db)
+    assert len(db.get_tickets_df()) == 5
+
+
+def test_matching_tickets_drop_out_of_every_query(db):
+    _prep_and_orders(db)
+    db.set_setting(db.EXCLUDED_ITEMS_KEY, "cream")
+
+    assert len(db.get_tickets_df()) == 3
+    assert db.count_tickets() == 3
+    assert db.get_daily_summary()[0]["total"] == 3
+    # The 3000s and 3600s prep tickets would dominate both of these.
+    assert db.get_daily_summary()[0]["longest_seconds"] == 300
+    assert db.get_duration_percentile(q=90) == 300
+    assert sum(r["total"] for r in db.get_source_daily_summary()) == 3
+    assert sum(r["total"] for r in db.get_hourly_daily_summary()) == 3
+
+
+def test_excluded_rows_are_kept_not_deleted(db):
+    """The rule must be changeable without a re-sync, so the rows stay."""
+    _prep_and_orders(db)
+    db.set_setting(db.EXCLUDED_ITEMS_KEY, "cream")
+    assert len(db.get_tickets_df()) == 3
+
+    db.set_setting(db.EXCLUDED_ITEMS_KEY, "")
+    assert len(db.get_tickets_df()) == 5      # back without re-importing
+
+
+def test_matching_is_case_insensitive_on_both_backends(db):
+    """LIKE is case-sensitive on Postgres and not on SQLite."""
+    _prep_and_orders(db)
+    db.set_setting(db.EXCLUDED_ITEMS_KEY, "CREAM")
+    assert len(db.get_tickets_df()) == 3
+
+
+def test_a_keyword_matches_anywhere_in_the_item_list(db):
+    db.save_day_tickets("2026-09-01",
+                        make_tickets("2026-09-01", [100],
+                                     items="Latte, Cold Brew, Cream Prep"),
+                        "Gardena")
+    db.set_setting(db.EXCLUDED_ITEMS_KEY, "cream")
+    assert db.get_tickets_df().empty
+
+
+def test_several_keywords_are_ored(db):
+    for items in ("Cream Batch", "Prep Tray", "Latte"):
+        db.save_day_tickets(f"2026-09-0{1 + ('Cream' in items) + 2*('Prep' in items)}",
+                            make_tickets("2026-09-01", [100], items=items), "Gardena")
+    db.set_setting(db.EXCLUDED_ITEMS_KEY, "cream, prep")
+    assert len(db.get_tickets_df()) == 1
+
+
+def test_a_ticket_with_no_items_is_never_excluded(db):
+    """An empty items field is missing data, not a match."""
+    db.save_day_tickets("2026-09-01",
+                        make_tickets("2026-09-01", [100], items=""), "Gardena")
+    db.set_setting(db.EXCLUDED_ITEMS_KEY, "cream")
+    assert len(db.get_tickets_df()) == 1
+
+
+def test_summary_reports_what_the_rule_removes(db):
+    _prep_and_orders(db)
+    got = db.get_excluded_ticket_summary(["cream"])
+    assert got["count"] == 2
+    assert len(got["sample"]) == 2
+    assert all("Cream" in s["items"] for s in got["sample"])
+
+    assert db.get_excluded_ticket_summary([])["count"] == 0
+
+
+def test_exclusions_apply_per_location_query_too(db):
+    _prep_and_orders(db)
+    db.save_day_tickets("2026-09-01",
+                        make_tickets("2026-09-01", [150] * 2), "Koreatown")
+    db.set_setting(db.EXCLUDED_ITEMS_KEY, "cream")
+    assert len(db.get_tickets_df(location="Gardena")) == 3
+    assert len(db.get_tickets_df(location="Koreatown")) == 2

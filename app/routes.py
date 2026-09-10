@@ -5,7 +5,7 @@ from flask_login import login_required, login_user, logout_user, current_user
 from werkzeug.security import check_password_hash
 
 from .analysis import (
-    parse_report, analyze_df,
+    parse_report, analyze_df, drop_excluded_items,
     fmt_time, fmt_hour,
 )
 from .db import (
@@ -17,6 +17,8 @@ from .db import (
     create_reset_token, get_valid_reset_token, mark_token_used,
     update_user_password, bulk_assign_location,
     get_targets, get_setting, set_setting,
+    get_excluded_item_keywords, get_excluded_ticket_summary,
+    EXCLUDED_ITEMS_KEY,
 )
 import io
 import json
@@ -205,9 +207,18 @@ def analyze():
             # Single day — existing behavior: show results
             date_val, day_df = date_groups[0]
             iso = date_val.strftime("%Y-%m-%d")
+            # Store every ticket, analyse only the real orders — the excluded
+            # rows stay on file so the rule can change without a re-upload.
             save_day_tickets(iso, day_df, location)
-            result = analyze_df(day_df, target_seconds=targets["target_seconds"], target_pct=targets["target_pct"])
-            return render_template("results.html", **result, iso_date=iso)
+            kept = drop_excluded_items(day_df, get_excluded_item_keywords())
+            if kept.empty:
+                flash("Every ticket in that file matched an excluded item "
+                      "keyword, so there is nothing to report. Check the "
+                      "keywords under Settings.", "error")
+                return redirect(url_for("main.index"))
+            result = analyze_df(kept, target_seconds=targets["target_seconds"], target_pct=targets["target_pct"])
+            return render_template("results.html", **result, iso_date=iso,
+                                   excluded_count=len(day_df) - len(kept))
         else:
             # Multiple days — save each group and redirect to history
             for date_val, day_df in date_groups:
@@ -738,19 +749,46 @@ def admin_sync():
 @login_required
 def admin_settings():
     _require_admin()
+
+    # Preview shows what a rule would exclude without saving it, so nobody
+    # has to change the numbers to find out whether the rule is right.
+    preview = None
+
     if request.method == "POST":
-        minutes = int(request.form.get("minutes", 4))
-        seconds = int(request.form.get("seconds", 54))
-        target_pct = int(request.form.get("target_pct", 85))
-        target_seconds = minutes * 60 + seconds
-        set_setting("target_seconds", str(target_seconds))
-        set_setting("target_pct", str(target_pct))
-        flash(f"Target updated to {minutes}m {seconds}s at {target_pct}% goal.", "success")
-        return redirect(url_for("main.admin_settings"))
+        action = request.form.get("action", "target")
+
+        if action in ("exclusions", "preview"):
+            raw = request.form.get("excluded_items", "")
+            keywords = [k.strip().lower() for k in raw.split(",") if k.strip()]
+            if action == "preview":
+                preview = get_excluded_ticket_summary(keywords)
+            else:
+                set_setting(EXCLUDED_ITEMS_KEY, ", ".join(keywords))
+                hit = get_excluded_ticket_summary(keywords)["count"]
+                flash(
+                    f"Excluding {hit:,} ticket{'s' if hit != 1 else ''} matching "
+                    f"{', '.join(keywords)}." if keywords else
+                    "Item exclusions cleared — every ticket now counts.",
+                    "success")
+                return redirect(url_for("main.admin_settings"))
+        else:
+            minutes = int(request.form.get("minutes", 4))
+            seconds = int(request.form.get("seconds", 54))
+            target_pct = int(request.form.get("target_pct", 85))
+            target_seconds = minutes * 60 + seconds
+            set_setting("target_seconds", str(target_seconds))
+            set_setting("target_pct", str(target_pct))
+            flash(f"Target updated to {minutes}m {seconds}s at {target_pct}% goal.", "success")
+            return redirect(url_for("main.admin_settings"))
+
     targets = get_targets()
     ts = targets["target_seconds"]
+    saved_keywords = get_excluded_item_keywords()
     return render_template("admin_settings.html",
         target_minutes=ts // 60,
         target_seconds_rem=ts % 60,
         target_pct=targets["target_pct"],
+        excluded_items=", ".join(saved_keywords),
+        excluded_summary=preview or get_excluded_ticket_summary(saved_keywords),
+        is_preview=preview is not None,
     )
