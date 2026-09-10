@@ -16,7 +16,7 @@ import re
 import numpy as np
 import pandas as pd
 
-from .analysis import fmt_time
+from .analysis import fmt_time, percentile_seconds
 
 # Items column may carry quantity prefixes like "2x Latte", "2 × Latte", "3 Latte"
 _QTY_PREFIX = re.compile(r"^\s*\d+\s*[x×]?\s*", flags=re.IGNORECASE)
@@ -267,4 +267,6 @@ def analyze_loss_drivers(df, target_seconds, target_pct):
         "items":    item_association_analysis(df, target_seconds),
         "size":     order_size_analysis(df, target_seconds, target_pct),
         "total_tickets": int(len(df)),
+        "p90_seconds":   percentile_seconds(df["duration"], 90),
+        "p90_fmt":       fmt_time(percentile_seconds(df["duration"], 90)),
     }

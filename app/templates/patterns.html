@@ -141,6 +141,11 @@
           <div class="value" style="font-size:22px;">{{ s.avg_fmt }}</div>
           <div class="sub">{{ s.avg_tickets }} tickets/day · worst {{ s.worst_day.date }}</div>
         </div>
+        <div class="stat-card">
+          <div class="label">{{ s.location }} 90th %ile</div>
+          <div class="value" style="font-size:22px;">{{ s.p90_fmt }}</div>
+          <div class="sub">9 in 10 tickets beat this</div>
+        </div>
       {% endfor %}
     </div>
     <div id="comparison-chart" class="chart short"></div>

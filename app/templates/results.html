@@ -56,6 +56,11 @@
     <div class="value">{{ avg_fmt }}</div>
     <div class="sub">target {{ target_fmt }}</div>
   </div>
+  <div class="stat-card {% if p90_seconds > target_seconds %}amber{% endif %}">
+    <div class="label">90th Percentile</div>
+    <div class="value">{{ p90_fmt }}</div>
+    <div class="sub">9 in 10 tickets beat this</div>
+  </div>
   <div class="stat-card amber">
     <div class="label">Clusters</div>
     <div class="value">{{ clusters | length }}</div>

@@ -589,6 +589,75 @@ def get_daily_summary(from_date: str = None, to_date: str = None,
     return rows
 
 
+# Which columns a percentile may be grouped by. A whitelist rather than an
+# f-string of whatever the caller passed: this goes straight into SQL.
+_PERCENTILE_GROUPS = {
+    "report_date": "report_date",
+    "location":    "location",
+}
+
+
+def get_duration_percentile(from_date: str = None, to_date: str = None,
+                            location: str = None, group_by: str = None,
+                            q: int = 90):
+    """
+    Nearest-rank q-th percentile of ticket duration, in seconds.
+
+    Returns a {group: seconds} dict when group_by is given, otherwise a single
+    int for the whole filtered set.
+
+    There is no portable percentile function — Postgres has PERCENTILE_CONT,
+    SQLite has nothing — but both have window functions, so rank the durations
+    and take the first one at or past the cut. Nearest rank also means the
+    answer is always a duration that a real ticket actually took, which is
+    what someone reading "90% of tickets finished within this" expects.
+
+    ceil(n*q/100) is written as floor((n*q + 99)/100) because integer division
+    is the only kind both backends agree on.
+    """
+    if group_by is not None and group_by not in _PERCENTILE_GROUPS:
+        raise ValueError(f"cannot group a percentile by {group_by!r}")
+    if not 0 < q <= 100:
+        raise ValueError(f"percentile must be in (0, 100], got {q}")
+
+    _ensure_schema()
+    where, params = _ticket_filters(from_date, to_date, location)
+
+    if group_by:
+        col = _PERCENTILE_GROUPS[group_by]
+        sql = f"""
+            WITH ranked AS (
+                SELECT {col} AS grp,
+                       duration,
+                       ROW_NUMBER() OVER (PARTITION BY {col} ORDER BY duration) AS rn,
+                       COUNT(*)     OVER (PARTITION BY {col})                   AS n
+                  FROM tickets{where}
+            )
+            SELECT grp, MIN(duration) AS pct
+              FROM ranked
+             WHERE rn >= (n * ? + 99) / 100
+          GROUP BY grp
+        """
+        with _get_cursor() as cur:
+            cur.execute(_adapt(sql), params + [q])
+            return {dict(r)["grp"]: int(dict(r)["pct"] or 0)
+                    for r in cur.fetchall()}
+
+    sql = f"""
+        WITH ranked AS (
+            SELECT duration,
+                   ROW_NUMBER() OVER (ORDER BY duration) AS rn,
+                   COUNT(*)     OVER ()                  AS n
+              FROM tickets{where}
+        )
+        SELECT MIN(duration) AS pct FROM ranked WHERE rn >= (n * ? + 99) / 100
+    """
+    with _get_cursor() as cur:
+        cur.execute(_adapt(sql), params + [q])
+        row = cur.fetchone()
+    return int(dict(row)["pct"] or 0) if row else 0
+
+
 def get_source_daily_summary(from_date: str = None, to_date: str = None,
                              location: str = None, target_seconds: int = 294) -> list:
     """Per (order source, day) totals — for the source trend chart."""

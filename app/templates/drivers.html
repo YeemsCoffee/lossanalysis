@@ -8,7 +8,7 @@
 {% block content %}
 <div class="results-header">
   <h1>Loss Drivers</h1>
-  <div class="date">What's actually driving over-target tickets · target {{ target_fmt }} · {{ target_pct }}% goal{% if location %} · {{ location }}{% endif %}</div>
+  <div class="date">What's actually driving over-target tickets · target {{ target_fmt }} · {{ target_pct }}% goal{% if drivers %} · 90th percentile {{ drivers.p90_fmt }}{% endif %}{% if location %} · {{ location }}{% endif %}</div>
 </div>
 
 <!-- Location filter tabs -->

@@ -289,3 +289,74 @@ def test_sync_status_survives_a_corrupt_value(db):
     """A bad value must not take the whole page down with it."""
     db.set_setting(db.SYNC_STATUS_KEY, "not json{")
     assert db.get_sync_status() == {}
+
+
+# --- percentiles -------------------------------------------------------------
+
+def test_p90_is_the_nearest_rank_value(db):
+    """
+    10 tickets, so the 90th percentile is the 9th smallest.
+
+    Nearest rank rather than an interpolated one: the number on the dashboard
+    should be a time some ticket actually took.
+    """
+    db.save_day_tickets("2026-09-01",
+                        make_tickets("2026-09-01", list(range(10, 110, 10))),
+                        "Gardena")
+    assert db.get_duration_percentile("2026-09-01", "2026-09-01", q=90) == 90
+
+
+def test_p90_matches_the_python_definition(db):
+    """
+    The single-day page computes p90 in pandas, History gets it from SQL.
+    Two definitions of the same statistic would show two numbers for one day.
+    """
+    from app.analysis import percentile_seconds
+
+    durations = [12, 480, 301, 44, 295, 78, 600, 130, 294, 210, 55, 900, 61]
+    db.save_day_tickets("2026-09-01", make_tickets("2026-09-01", durations),
+                        "Gardena")
+
+    for q in (50, 75, 90, 95, 99, 100):
+        assert (db.get_duration_percentile("2026-09-01", "2026-09-01", q=q)
+                == percentile_seconds(durations, q)), f"q={q}"
+
+
+def test_p90_groups_per_day(db):
+    db.save_day_tickets("2026-09-01", make_tickets("2026-09-01", [100] * 9 + [900]),
+                        "Gardena")
+    db.save_day_tickets("2026-09-02", make_tickets("2026-09-02", [200] * 9 + [800]),
+                        "Gardena")
+    by_day = db.get_duration_percentile(group_by="report_date", q=90)
+    assert by_day == {"2026-09-01": 100, "2026-09-02": 200}
+
+
+def test_p90_groups_per_location(db):
+    db.save_day_tickets("2026-09-01", make_tickets("2026-09-01", [100] * 10), "Gardena")
+    db.save_day_tickets("2026-09-01", make_tickets("2026-09-01", [500] * 10), "Koreatown")
+    assert db.get_duration_percentile(group_by="location", q=90) == {
+        "Gardena": 100, "Koreatown": 500}
+
+
+def test_p90_respects_the_date_and_location_filters(db):
+    db.save_day_tickets("2026-09-01", make_tickets("2026-09-01", [900] * 10), "Koreatown")
+    db.save_day_tickets("2026-09-02", make_tickets("2026-09-02", [100] * 10), "Gardena")
+    assert db.get_duration_percentile("2026-09-02", "2026-09-02") == 100
+    assert db.get_duration_percentile(location="Gardena") == 100
+
+
+def test_p90_of_a_single_ticket_is_that_ticket(db):
+    db.save_day_tickets("2026-09-01", make_tickets("2026-09-01", [123]), "Gardena")
+    assert db.get_duration_percentile(q=90) == 123
+
+
+def test_p90_of_nothing_is_zero_not_an_error(db):
+    assert db.get_duration_percentile("2019-01-01", "2019-01-02", q=90) == 0
+    assert db.get_duration_percentile("2019-01-01", "2019-01-02",
+                                      group_by="report_date", q=90) == {}
+
+
+def test_percentile_group_by_is_whitelisted(db):
+    """It goes straight into the SQL string, so it cannot be caller-supplied."""
+    with pytest.raises(ValueError):
+        db.get_duration_percentile(group_by="duration; DROP TABLE tickets")

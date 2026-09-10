@@ -75,6 +75,11 @@
     <div class="value">{{ pct_on_target_avg }}%</div>
     <div class="sub">across all days</div>
   </div>
+  <div class="stat-card {% if period_p90 > targets.target_seconds %}amber{% endif %}">
+    <div class="label">90th Percentile</div>
+    <div class="value">{{ period_p90_fmt }}</div>
+    <div class="sub">9 in 10 tickets beat this</div>
+  </div>
   <div class="stat-card danger">
     <div class="label">Total Over Target</div>
     <div class="value">{{ total_over }}</div>
@@ -141,6 +146,7 @@
           <th>Over Target</th>
           <th>On-Target %</th>
           <th>Avg Time</th>
+          <th>90th %ile</th>
           <th>Longest</th>
         </tr>
       </thead>
@@ -156,8 +162,11 @@
                 {{ r.pct_on_target }}%
               </span>
             </td>
-            <td class="duration-cell {% if r.avg_seconds > 294 %}over{% else %}ok{% endif %}">
+            <td class="duration-cell {% if r.avg_seconds > targets.target_seconds %}over{% else %}ok{% endif %}">
               {{ r.avg_fmt }}
+            </td>
+            <td class="duration-cell {% if r.p90_seconds > targets.target_seconds %}over{% else %}ok{% endif %}">
+              {{ r.p90_fmt }}
             </td>
             <td class="duration-cell over">{{ r.longest_fmt }}</td>
           </tr>

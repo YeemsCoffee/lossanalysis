@@ -141,7 +141,7 @@ def weekday_hour_heatmap(hourly_rows, target_pct, min_tickets=5):
 # Location comparison
 # ---------------------------------------------------------------------------
 
-def location_comparison(daily_by_location, target_pct):
+def location_comparison(daily_by_location, target_pct, p90_by_location=None):
     """
     Side-by-side totals per store, plus a shared on-time trend.
 
@@ -158,6 +158,7 @@ def location_comparison(daily_by_location, target_pct):
         # Weight each day's average by its ticket count.
         avg_sec = (sum(r["avg_seconds"] * r["total"] for r in rows) / tickets
                    if tickets else 0)
+        p90 = (p90_by_location or {}).get(loc, 0)
         day_rates = [{"date": r["report_date"],
                       "pct": round(_on_time_pct(r["total"], r["over_count"]), 1)}
                      for r in sorted(rows, key=lambda r: r["report_date"])]
@@ -170,6 +171,8 @@ def location_comparison(daily_by_location, target_pct):
             "pct_on_target": round(_on_time_pct(tickets, over), 1),
             "avg_seconds":   round(avg_sec),
             "avg_fmt":       fmt_time(avg_sec),
+            "p90_seconds":   p90,
+            "p90_fmt":       fmt_time(p90),
             "days":          len(rows),
             "avg_tickets":   round(tickets / len(rows)),
             "worst_day":     worst,

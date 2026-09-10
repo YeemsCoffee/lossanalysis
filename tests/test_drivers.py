@@ -146,7 +146,8 @@ def test_order_size_knee_unset_when_size_does_not_matter():
 def test_analyze_loss_drivers_returns_every_section():
     df = make_tickets("2026-09-01", [OK, OVER] * 15)
     out = analyze_loss_drivers(df, TARGET, 85)
-    assert set(out) == {"wip", "cascade", "items", "size", "total_tickets"}
+    assert set(out) == {"wip", "cascade", "items", "size", "total_tickets",
+                        "p90_seconds", "p90_fmt"}
     assert out["total_tickets"] == 30
     for section in ("wip", "cascade", "size"):
         assert out[section]["chart"], f"{section} produced no chart data"

@@ -11,7 +11,7 @@ from .analysis import (
 from .db import (
     save_day_tickets, get_tickets_df, get_date_bounds, get_distinct_dates,
     get_daily_summary, get_source_daily_summary, get_hourly_daily_summary,
-    count_tickets, get_sync_status,
+    count_tickets, get_sync_status, get_duration_percentile,
     get_user_by_email, update_last_login,
     create_user, list_users, set_user_active, update_user_location,
     create_reset_token, get_valid_reset_token, mark_token_used,
@@ -286,6 +286,8 @@ def history():
     # Every number on this page is an aggregate, so let the database do the
     # grouping and return a row per day instead of a row per ticket.
     daily = get_daily_summary(from_date, to_date, location=loc, target_seconds=tgt)
+    p90_by_date = get_duration_percentile(from_date, to_date, location=loc,
+                                          group_by="report_date", q=90)
     if not daily:
         return render_template("history.html", rows=[], charts=None,
                                sync=_sync_banner(),
@@ -311,6 +313,8 @@ def history():
             "pct_on_target":   round(on_time / total * 100, 1) if total else 0,
             "avg_seconds":     avg,
             "avg_fmt":         fmt_time(avg),
+            "p90_seconds":     p90_by_date.get(d["report_date"], 0),
+            "p90_fmt":         fmt_time(p90_by_date.get(d["report_date"], 0)),
             "longest_seconds": longest,
             "longest_fmt":     fmt_time(longest),
         })
@@ -322,6 +326,10 @@ def history():
     avg_on_target = round(sum(r["pct_on_target"] for r in rows) / len(rows), 1)
     worst_day     = min(rows, key=lambda r: r["pct_on_target"])
     best_day      = max(rows, key=lambda r: r["pct_on_target"])
+
+    # Across every ticket in the range, not the mean of the daily figures —
+    # averaging percentiles does not give you a percentile.
+    period_p90 = get_duration_percentile(from_date, to_date, location=loc, q=90)
 
     # ---- Chart data ----------------------------------------------------------
     dates_asc   = sorted(r["report_date"] for r in rows)
@@ -441,6 +449,8 @@ def history():
         total_tickets=total_tickets,
         total_over=total_over,
         pct_on_target_avg=avg_on_target,
+        period_p90=period_p90,
+        period_p90_fmt=fmt_time(period_p90),
         worst_day=worst_day,
         best_day=best_day,
         location=location,
@@ -574,7 +584,10 @@ def patterns():
     result = {
         "weekday":    weekday_summary(daily, target_pct),
         "heatmap":    weekday_hour_heatmap(hourly, target_pct),
-        "comparison": location_comparison(daily_by_location, target_pct),
+        "comparison": location_comparison(
+            daily_by_location, target_pct,
+            p90_by_location=get_duration_percentile(from_date, to_date,
+                                                    group_by="location", q=90)),
         "total_tickets": sum(d["total"] for d in daily),
         "days": len(daily),
     }

@@ -22,6 +22,24 @@ def fmt_time(seconds):
     return f"{sign}{m}:{s:02d}"
 
 
+def percentile_seconds(durations, q=90):
+    """
+    Nearest-rank q-th percentile of a set of durations, in whole seconds.
+
+    Deliberately the same definition as db.get_duration_percentile() — the
+    single-day page computes this from a DataFrame while the History table
+    gets it from SQL, and the two must not disagree about the same day.
+
+    Not pandas' quantile(): its default interpolates between two tickets and
+    can report a time no ticket actually took.
+    """
+    values = sorted(int(v) for v in durations)
+    if not values:
+        return 0
+    rank = max(-(-len(values) * q // 100), 1)      # ceil(n*q/100), at least 1
+    return values[rank - 1]
+
+
 def fmt_clock(ts):
     return ts.strftime("%I:%M %p").lstrip("0")
 
@@ -322,6 +340,7 @@ def analyze_df(df: pd.DataFrame, target_seconds=None, target_pct=None) -> dict:
     pct_over   = round(over_count / total * 100, 1)
     pct_on     = round(on_time / total * 100, 1)
     avg_sec    = round(df["duration"].mean())
+    p90_sec    = percentile_seconds(df["duration"], 90)
     max_row    = df.loc[df["duration"].idxmax()]
     hourly     = hourly_summary(df)
     sources    = source_summary(df)
@@ -338,6 +357,8 @@ def analyze_df(df: pd.DataFrame, target_seconds=None, target_pct=None) -> dict:
         "pct_on_target":         pct_on,
         "avg_seconds":           avg_sec,
         "avg_fmt":               fmt_time(avg_sec),
+        "p90_seconds":           p90_sec,
+        "p90_fmt":               fmt_time(p90_sec),
         "longest_seconds":       int(max_row["duration"]),
         "longest_fmt":           fmt_time(int(max_row["duration"])),
         "longest_over_by":       fmt_time(int(max_row["duration"]) - target_seconds),
