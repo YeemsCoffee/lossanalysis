@@ -239,6 +239,18 @@ def test_date_range_is_sent_as_a_time_dimension(square):
                    "dateRange": ["2026-09-01", "2026-09-07"]}]
 
 
+def test_order_is_sent_as_a_list_of_pairs(square):
+    """Square rejects the {field: direction} object form Cube also documents.
+
+    It answers a bare 400 "Invalid request" with no hint as to which part of
+    the query it disliked, so keep the pair form.
+    """
+    square["responses"] = [{"data": []}]
+    square_sync.fetch_ticket_rows("2026-09-01", "2026-09-01")
+    assert square["requests"][0]["body"]["query"]["order"] == [
+        [KDS.DISPLAYED_AT, "asc"]]
+
+
 def test_ticket_key_is_grouped_so_measures_are_per_ticket(square):
     """Grouping by ticket key is what makes the aggregate a single ticket's time."""
     square["responses"] = [{"data": []}]

@@ -114,7 +114,9 @@ def fetch_ticket_rows(from_date, to_date, token=None):
         ],
         "timeDimensions": _date_filter(from_date, to_date),
         "filters": _station_filter(),
-        "order": {KDS.DISPLAYED_AT: "asc"},
+        # A list of pairs, not the {field: direction} object Cube also accepts:
+        # Square rejects the object form with a bare 400 "Invalid request".
+        "order": [[KDS.DISPLAYED_AT, "asc"]],
     }, token=token)
 
 
