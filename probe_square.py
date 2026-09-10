@@ -5,8 +5,9 @@ Sends progressively richer queries and reports the first one that fails, so a
 400 "Invalid request" becomes a specific culprit. Read-only — it never writes
 to the database.
 
-    set SQUARE_ACCESS_TOKEN=...
     python probe_square.py
+
+It asks for the token if SQUARE_ACCESS_TOKEN isn't already set.
 """
 import json
 import os
@@ -15,8 +16,13 @@ import urllib.error
 import urllib.request
 from datetime import date, timedelta
 
-BASE  = os.environ.get("SQUARE_API_BASE", "https://connect.squareup.com/reporting")
-TOKEN = os.environ.get("SQUARE_ACCESS_TOKEN", "")
+BASE = os.environ.get("SQUARE_API_BASE", "https://connect.squareup.com/reporting")
+
+# Prompt rather than insist on the environment variable: `set` vs `export` vs
+# `$env:` differs per shell, and getting that wrong is a pointless detour.
+TOKEN = os.environ.get("SQUARE_ACCESS_TOKEN", "").strip()
+if not TOKEN:
+    TOKEN = input("Square access token: ").strip()
 
 YESTERDAY = (date.today() - timedelta(days=1)).isoformat()
 TODAY     = date.today().isoformat()
@@ -49,9 +55,6 @@ def probe(label, query, show_row=False):
         print()
     return ok
 
-
-if not TOKEN:
-    sys.exit("Set SQUARE_ACCESS_TOKEN first.")
 
 print(f"\nProbing the KDS cube for {YESTERDAY} to {TODAY}\n")
 
