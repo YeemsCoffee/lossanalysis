@@ -376,6 +376,82 @@ def test_recent_includes_today_when_asked(square, monkeypatch):
     assert seen == {"from_": "2026-09-07", "to": "2026-09-08"}
 
 
+@pytest.fixture
+def fixed_today(monkeypatch):
+    """Pin date.today() to 2026-09-08 and capture the range sync_range gets."""
+    import datetime as dt
+
+    class FixedDate(dt.date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 9, 8)
+
+    monkeypatch.setattr(square_sync, "date", FixedDate)
+    seen = {}
+    monkeypatch.setattr(square_sync, "sync_range",
+                        lambda f, t, *a, **k: seen.update(from_=f, to=t) or {})
+    return seen
+
+
+def _last_seen(monkeypatch, mapping):
+    monkeypatch.setattr(square_sync, "get_last_date_by_location",
+                        lambda: mapping)
+
+
+def test_catch_up_reaches_back_to_the_furthest_behind_location(
+        square, monkeypatch, fixed_today):
+    """One location stalling must widen the window, even if the other is current."""
+    _last_seen(monkeypatch, {"Gardena": "2026-09-08", "Koreatown": "2026-09-04"})
+    square_sync.sync_recent(2, LOCATIONS, include_today=True, catch_up=True)
+    assert fixed_today == {"from_": "2026-09-04", "to": "2026-09-08"}
+
+
+def test_catch_up_never_narrows_the_requested_window(
+        square, monkeypatch, fixed_today):
+    """Everything current still syncs the normal two days, not just today."""
+    _last_seen(monkeypatch, {"Gardena": "2026-09-08", "Koreatown": "2026-09-08"})
+    square_sync.sync_recent(2, LOCATIONS, include_today=True, catch_up=True)
+    assert fixed_today == {"from_": "2026-09-07", "to": "2026-09-08"}
+
+
+def test_a_location_with_no_data_gets_the_cap_not_all_of_history(
+        square, monkeypatch, fixed_today):
+    """
+    A cold start must not try to pull the ~2 years of KDS history in one
+    query on a 15-minute schedule.
+    """
+    _last_seen(monkeypatch, {"Gardena": "2026-09-08"})   # Koreatown unknown
+    monkeypatch.setattr(square_sync, "CATCH_UP_MAX_DAYS", 14)
+    square_sync.sync_recent(2, LOCATIONS, include_today=True, catch_up=True)
+    assert fixed_today == {"from_": "2026-08-26", "to": "2026-09-08"}
+
+
+def test_a_gap_beyond_the_cap_is_reported_not_silently_shortened(
+        square, monkeypatch, fixed_today):
+    """Covering less than asked must be visible, or the hole looks filled."""
+    _last_seen(monkeypatch, {"Gardena": "2026-09-08", "Koreatown": "2026-01-02"})
+    monkeypatch.setattr(square_sync, "CATCH_UP_MAX_DAYS", 14)
+    summary = square_sync.sync_recent(2, LOCATIONS, include_today=True,
+                                      catch_up=True)
+    assert fixed_today["from_"] == "2026-08-26"
+    assert summary["gap_beyond_reach"] == "2026-01-02"
+
+
+def test_catch_up_is_off_unless_asked(square, monkeypatch, fixed_today):
+    _last_seen(monkeypatch, {"Gardena": "2026-01-02"})
+    square_sync.sync_recent(2, LOCATIONS, include_today=True)
+    assert fixed_today == {"from_": "2026-09-07", "to": "2026-09-08"}
+
+
+def test_a_malformed_stored_date_does_not_break_the_sync(
+        square, monkeypatch, fixed_today):
+    """A junk report_date should fall back to the cap, not raise."""
+    _last_seen(monkeypatch, {"Gardena": "not-a-date", "Koreatown": "2026-09-08"})
+    monkeypatch.setattr(square_sync, "CATCH_UP_MAX_DAYS", 14)
+    square_sync.sync_recent(2, LOCATIONS, include_today=True, catch_up=True)
+    assert fixed_today == {"from_": "2026-08-26", "to": "2026-09-08"}
+
+
 def test_evening_pacific_ticket_lands_on_the_right_business_day():
     """
     18:30 Pacific on Sep 7 is 01:30 UTC on Sep 8. Square's local_date says

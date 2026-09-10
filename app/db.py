@@ -710,6 +710,26 @@ def get_date_bounds() -> tuple:
     return (row["mn"], row["mx"])
 
 
+def get_last_date_by_location() -> dict:
+    """
+    The most recent day each location has tickets for.
+
+    Per location rather than overall, because the two stores fail
+    independently: a rename that stops Koreatown matching, or a KDS that
+    stayed off, leaves that one location behind while the other looks
+    perfectly current. An overall MAX(report_date) hides exactly that.
+    """
+    _ensure_schema()
+    with _get_cursor() as cur:
+        cur.execute("""
+            SELECT location, MAX(report_date) AS mx
+              FROM tickets
+             WHERE location IS NOT NULL
+          GROUP BY location
+        """)
+        return {dict(r)["location"]: dict(r)["mx"] for r in cur.fetchall()}
+
+
 def get_distinct_dates() -> list:
     _ensure_schema()
     with _get_cursor() as cur:

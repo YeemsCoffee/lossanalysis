@@ -29,7 +29,8 @@ from datetime import date, timedelta
 import pandas as pd
 
 from . import square_api
-from .db import get_tickets_df, record_sync_status, save_day_tickets
+from .db import (get_last_date_by_location, get_tickets_df, record_sync_status,
+                 save_day_tickets)
 
 # ---------------------------------------------------------------------------
 # Field names, all in one place.
@@ -65,6 +66,12 @@ class KDS:
 # the customer-facing completion. Override with SQUARE_STATION_TYPE if your
 # CSV turns out to match prep instead — validate_against_csv() will say.
 STATION_TYPE = os.environ.get("SQUARE_STATION_TYPE", "").strip()
+
+# How far back a catch-up run may reach. There is roughly two years of KDS
+# history, and a cold start that tried to pull all of it on a 15-minute
+# schedule would time out and retry forever. Past this the run says so
+# rather than silently covering less than it should.
+CATCH_UP_MAX_DAYS = int(os.environ.get("SQUARE_CATCH_UP_DAYS", "14"))
 
 # Square's location names may not equal the app's ("Yeems Coffee - Gardena"
 # vs "Gardena"). Anything unmatched falls back to substring matching.
@@ -255,9 +262,14 @@ def sync_range(from_date, to_date, known_locations, token=None, dry_run=False):
 
 
 def sync_recent(days, known_locations, token=None, dry_run=False,
-                include_today=False):
+                include_today=False, catch_up=False):
     """
     Sync the last N days.
+
+    With catch_up, the window also stretches back to the last day each
+    location actually has data for, so a gap left by an outage, a stopped
+    KDS or a location that stopped matching gets filled by the next
+    scheduled run instead of staying a hole forever.
 
     include_today matters more than it looks. This process runs on UTC while
     the stores run on Pacific time, so from late afternoon onwards the server's
@@ -268,8 +280,56 @@ def sync_recent(days, known_locations, token=None, dry_run=False,
     """
     end   = date.today() if include_today else date.today() - timedelta(days=1)
     start = end - timedelta(days=max(days, 1) - 1)
-    return sync_range(start.isoformat(), end.isoformat(),
-                      known_locations, token=token, dry_run=dry_run)
+
+    if catch_up:
+        start, capped = catch_up_start(known_locations, start, end)
+    else:
+        capped = None
+
+    summary = sync_range(start.isoformat(), end.isoformat(),
+                         known_locations, token=token, dry_run=dry_run)
+    if capped:
+        summary["gap_beyond_reach"] = capped
+    return summary
+
+
+def catch_up_start(known_locations, default_start, end):
+    """
+    Move the window back to cover any location that has fallen behind.
+
+    Returns (start, gap_beyond_reach). The second is the date a location was
+    last seen when that is further back than CATCH_UP_MAX_DAYS, meaning the
+    scheduled run cannot close the gap on its own and a manual `sync --from`
+    is needed. It is None when nothing is out of reach.
+
+    Never returns a start later than default_start: catching up widens the
+    window, it never narrows the one the caller asked for.
+    """
+    last_seen = get_last_date_by_location()
+
+    # A location with no tickets at all is behind by definition — but by an
+    # unknown amount, so it gets the cap rather than the whole of history.
+    floor  = end - timedelta(days=max(CATCH_UP_MAX_DAYS, 1) - 1)
+    wanted = [_parse_date(last_seen.get(loc)) or floor for loc in known_locations]
+    if not wanted:
+        return default_start, None
+
+    # Re-sync the last day a location has rather than the day after it: an
+    # afternoon sync stored a partial day, and sync_range replaces what it
+    # covers, so redoing it is both safe and the point.
+    oldest = min(wanted)
+    return min(default_start, max(oldest, floor)), (
+        oldest.isoformat() if oldest < floor else None)
+
+
+def _parse_date(value):
+    """A YYYY-MM-DD string as a date, or None if it is missing or malformed."""
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -440,6 +500,9 @@ def main(argv=None):
     r.add_argument("--dry-run", action="store_true")
     r.add_argument("--include-today", action="store_true",
                    help="include the in-progress day, for frequent syncing")
+    r.add_argument("--catch-up", action="store_true",
+                   help="also reach back to the last day each location has "
+                        f"data for, up to {CATCH_UP_MAX_DAYS} days")
 
     args = parser.parse_args(argv)
 
@@ -525,7 +588,8 @@ def main(argv=None):
                                      dry_run=args.dry_run)
             else:
                 summary = sync_recent(args.days, LOCATIONS, dry_run=args.dry_run,
-                                      include_today=args.include_today)
+                                      include_today=args.include_today,
+                                      catch_up=args.catch_up)
         except Exception as e:
             # Record the failure before re-raising. A scheduled sync that starts
             # failing is invisible otherwise: the app would go on showing the
@@ -543,6 +607,12 @@ def main(argv=None):
               f"({summary['from']} to {summary['to']})")
         for day in summary["days"]:
             print(f"  {day['date']}  {day['location']:<12} {day['tickets']:>6} tickets")
+        if summary.get("gap_beyond_reach"):
+            print(f"\n  WARNING — a location was last seen on "
+                  f"{summary['gap_beyond_reach']}, further back than "
+                  f"{CATCH_UP_MAX_DAYS} days. Close the rest by hand:\n"
+                  f"    python -m app.square_sync sync --from "
+                  f"{summary['gap_beyond_reach']} --to {summary['from']}")
         if summary["unmapped_locations"]:
             print("\n  WARNING — these Square locations did not map to a known "
                   "location and were skipped:")

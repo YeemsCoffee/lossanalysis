@@ -696,7 +696,8 @@ def admin_sync():
         return redirect(back)
 
     try:
-        summary = sync_recent(2, LOCATIONS, dry_run=dry, include_today=True)
+        summary = sync_recent(2, LOCATIONS, dry_run=dry, include_today=True,
+                              catch_up=True)
     except Exception as e:
         flash(f"Square sync failed: {type(e).__name__}: {e}", "error")
         return redirect(back)
@@ -706,6 +707,11 @@ def admin_sync():
     verb = "Would sync" if dry else "Synced"
     flash(f"{verb} {summary['tickets']:,} tickets — {days}.",
           "info" if dry else "success")
+
+    if summary.get("gap_beyond_reach"):
+        flash(f"A location was last seen on {summary['gap_beyond_reach']}, "
+              f"further back than a scheduled run reaches. Days before "
+              f"{summary['from']} need a manual backfill.", "error")
 
     if summary["unmapped_locations"]:
         flash("These Square locations were not recognised and were skipped: "
