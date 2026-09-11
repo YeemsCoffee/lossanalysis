@@ -143,3 +143,46 @@ def test_daily_run_count_is_sane(cron_lines):
     """Roughly a service day's worth — not 96, not a handful."""
     runs = len(_covered(cron_lines))
     assert 40 <= runs <= 60, f"{runs} runs a day looks wrong"
+
+
+# --- the job has to be able to run at all -------------------------------------
+
+def test_cron_runs_as_root(cron_lines):
+    """
+    EB writes the environment file 0600 root and owns /var/log.
+
+    As webapp the job could neither read its own credentials nor create the
+    log that would have said so, which is a sync that silently never runs.
+    """
+    for line in cron_lines:
+        assert line.split()[5] == "root", f"not running as root: {line}"
+
+
+def test_the_log_file_is_created_before_cron_needs_it(config):
+    cmds = " ".join(c.get("command", "") for c in config["commands"].values())
+    assert "/var/log/square-sync.log" in cmds
+
+
+def test_the_log_is_retrievable_from_the_console(config):
+    """A failure before Python starts is invisible in the app, so the log
+    has to reach the EB console instead of dying on the instance."""
+    for task in ("taillogs.d", "bundlelogs.d"):
+        path = f"/opt/elasticbeanstalk/tasks/{task}/square-sync.conf"
+        assert path in config["files"], f"missing {path}"
+        assert "/var/log/square-sync.log" in config["files"][path]["content"]
+
+
+def test_the_script_explains_an_unreadable_env_file(config):
+    """`set -e` used to abort with no clue which line failed."""
+    body = config["files"]["/opt/elasticbeanstalk/bin/square-sync.sh"]["content"]
+    assert "-r \"$ENV_FILE\"" in body
+    assert "FATAL" in body
+
+
+def test_the_script_does_not_abort_before_it_can_report(config):
+    """
+    No `set -e`: the interesting failures are the ones we want logged, and
+    -e exits on the failing line without saying anything.
+    """
+    body = config["files"]["/opt/elasticbeanstalk/bin/square-sync.sh"]["content"]
+    assert "set -euo" not in body
