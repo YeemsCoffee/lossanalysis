@@ -40,19 +40,27 @@ def percentile_seconds(durations, q=90):
     return values[rank - 1]
 
 
-def drop_excluded_items(df, keywords):
+def drop_excluded_items(df, keywords, sources=None):
     """
-    Drop tickets whose items match any keyword — prep work, not customer orders.
+    Drop prep tickets and third-party delivery orders.
 
-    The DataFrame twin of db._exclusion_clause(), for the report shown straight
+    `keywords` match the item list, `sources` match the order source. The
+    DataFrame twin of db._exclusion_clause(), for the report shown straight
     after an upload, which is built from the parsed file rather than from a
     query. Without it that report would count tickets the History page does
     not, and the same day would show two different numbers.
     """
-    if df.empty or not keywords:
+    if df.empty or not (keywords or sources):
         return df
-    items = df["Items in Ticket"].fillna("").astype(str).str.lower()
-    keep = ~items.apply(lambda s: any(k in s for k in keywords))
+
+    keep = pd.Series(True, index=df.index)
+    for terms, column in ((keywords, "Items in Ticket"),
+                          (sources, "Order Source")):
+        if not terms:
+            continue
+        # A blank column is missing data, not a match — fillna keeps those.
+        values = df[column].fillna("").astype(str).str.lower()
+        keep &= ~values.apply(lambda s: any(t in s for t in terms))
     return df[keep]
 
 

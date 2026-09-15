@@ -773,3 +773,74 @@ def test_saving_exclusions_changes_the_numbers(client, sqlite_db):
 
     assert sqlite_db.get_excluded_item_keywords() == ["cream"]
     assert sqlite_db.get_tickets_df().empty
+
+
+def _csv_with_delivery():
+    """Counter orders plus the three delivery platforms, as Square exports."""
+    rows = ["Ticket Name,Order Source,Number of Items,Items in Ticket,"
+            "Completion Time (seconds),Time Created,Time Completed,Device Name"]
+    for i, (src, secs) in enumerate([
+            ("Register", 100), ("Register", 200), ("Register", 300),
+            ("DoorDash", 900), ("Uber Eats", 800), ("Postmates", 700)]):
+        rows.append(f"T{i},{src},2,\"Latte\",{secs},"
+                    f"2026-09-01 09:0{i}:00,2026-09-01 09:3{i}:00,KDS1")
+    return "\n".join(rows).encode()
+
+
+def test_delivery_orders_are_excluded_from_upload_and_history_alike(client, sqlite_db):
+    """Both filters, one rule — the report and the stored day must agree."""
+    login(client)
+    sqlite_db.set_setting(sqlite_db.EXCLUDED_SOURCES_KEY, "uber, doordash, postmates")
+
+    page = client.post("/analyze", data={
+        "csrf_token": token_from(client, "/"),
+        "location": "Gardena",
+        "report": (io.BytesIO(_csv_with_delivery()), "day.csv"),
+    }, content_type="multipart/form-data", follow_redirects=True)
+    html = page.get_data(as_text=True)
+
+    assert ">3<" in html                      # the counter orders only
+    assert "15:00" not in html                # not the 900s DoorDash ticket
+    assert sqlite_db.get_daily_summary()[0]["total"] == 3
+    # All six rows are still on file, so the rule stays reversible.
+    assert sqlite_db.get_excluded_ticket_summary([], ["uber"])["count"] == 1
+
+
+def test_settings_lists_the_sources_actually_in_the_data(client, sqlite_db):
+    login(client)
+    sqlite_db.save_day_tickets("2026-09-01", pd.concat([
+        make_tickets("2026-09-01", [100], source="Register"),
+        make_tickets("2026-09-01", [900], source="Uber Eats"),
+    ], ignore_index=True), "Gardena")
+
+    html = client.get("/admin/settings").get_data(as_text=True)
+    assert "Uber Eats" in html and "Register" in html
+
+
+def test_saving_source_exclusions_changes_the_numbers(client, sqlite_db):
+    login(client)
+    sqlite_db.save_day_tickets("2026-09-01", pd.concat([
+        make_tickets("2026-09-01", [100], source="Register"),
+        make_tickets("2026-09-01", [900], source="Uber Eats"),
+    ], ignore_index=True), "Gardena")
+
+    client.post("/admin/settings", data={
+        "csrf_token": token_from(client, "/admin/settings"),
+        "action": "exclusions", "excluded_items": "", "excluded_sources": "uber",
+    }, follow_redirects=True)
+
+    assert sqlite_db.get_excluded_order_sources() == ["uber"]
+    assert len(sqlite_db.get_tickets_df()) == 1
+
+
+def test_saving_one_rule_does_not_wipe_the_other(client, sqlite_db):
+    """Both fields post together; a blank one must not silently clear the other."""
+    login(client)
+    client.post("/admin/settings", data={
+        "csrf_token": token_from(client, "/admin/settings"),
+        "action": "exclusions",
+        "excluded_items": "cream", "excluded_sources": "uber",
+    }, follow_redirects=True)
+
+    assert sqlite_db.get_excluded_item_keywords() == ["cream"]
+    assert sqlite_db.get_excluded_order_sources() == ["uber"]

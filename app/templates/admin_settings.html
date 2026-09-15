@@ -41,11 +41,11 @@
 </div>
 
 <div class="section" style="max-width:640px;">
-  <h2>🚫 Excluded Items</h2>
+  <h2>🚫 Excluded Tickets</h2>
   <div class="section-sub">
-    Tickets whose items match any of these words are prep work, not customer
-    orders, and are left out of every figure on every page. Comma separated,
-    case does not matter, and a word matches anywhere in the item name.
+    Tickets matching these rules are left out of every figure on every page.
+    Comma separated, case does not matter, and each word matches anywhere in
+    the field. Nothing is deleted — clear a rule and the numbers come back.
   </div>
   <form method="post">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -54,6 +54,33 @@
       <input class="field-input" type="text" name="excluded_items"
              value="{{ excluded_items }}" placeholder="cream, prep, test"
              style="width:100%;">
+      <div class="section-sub" style="margin-top:6px;">
+        Prep work that runs through the kitchen display but is not a customer
+        order.
+      </div>
+    </div>
+    <div class="field-group">
+      <label class="field-label">Order source contains</label>
+      <input class="field-input" type="text" name="excluded_sources"
+             value="{{ excluded_sources }}" placeholder="uber, doordash, postmates"
+             style="width:100%;">
+      <div class="section-sub" style="margin-top:6px;">
+        Third-party delivery, where the ticket clock runs while the kitchen
+        waits on a courier, so the time measures the platform rather than you.
+      </div>
+      {% if known_sources %}
+        <div class="section-sub" style="margin-top:10px;">
+          Sources in your data — match these exactly as Square names them:
+        </div>
+        <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;">
+          {% for s in known_sources %}
+            <span style="background:var(--gray-light); border-radius:12px;
+                         padding:3px 10px; font-size:13px;">
+              {{ s.source }} <span style="color:var(--gray);">{{ "{:,}".format(s.tickets) }}</span>
+            </span>
+          {% endfor %}
+        </div>
+      {% endif %}
     </div>
     <button class="btn" type="submit" name="action" value="preview"
             style="width:auto; display:inline-block; padding:12px 28px;
@@ -80,7 +107,7 @@
         <div class="table-wrap" style="margin-top:12px;">
           <table>
             <thead>
-              <tr><th>Date</th><th>Location</th><th>Ticket</th><th>Items</th><th>Time</th></tr>
+              <tr><th>Date</th><th>Location</th><th>Ticket</th><th>Source</th><th>Items</th><th>Time</th></tr>
             </thead>
             <tbody>
               {% for t in excluded_summary.sample %}
@@ -88,17 +115,20 @@
                   <td>{{ t.report_date }}</td>
                   <td>{{ t.location or "—" }}</td>
                   <td>{{ t.ticket_name }}</td>
-                  <td style="max-width:280px;">{{ t["items"] }}</td>
+                  <td>{{ t.order_source }}</td>
+                  <td style="max-width:240px;">{{ t["items"] }}</td>
                   <td class="duration-cell">{{ t.time_created[11:16] }}</td>
                 </tr>
               {% endfor %}
             </tbody>
           </table>
         </div>
-      {% elif excluded_summary.keywords %}
+      {% elif excluded_summary.keywords or excluded_summary.sources %}
         <div style="color:var(--gray);">
-          Nothing matches {{ excluded_summary.keywords | join(", ") }} — every
-          ticket still counts.
+          Nothing matches
+          {{ (excluded_summary.keywords + excluded_summary.sources) | join(", ") }}
+          — every ticket still counts. Check the spelling against the source
+          list above.
         </div>
       {% endif %}
     </div>

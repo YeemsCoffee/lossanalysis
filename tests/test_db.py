@@ -451,3 +451,94 @@ def test_exclusions_apply_per_location_query_too(db):
     db.set_setting(db.EXCLUDED_ITEMS_KEY, "cream")
     assert len(db.get_tickets_df(location="Gardena")) == 3
     assert len(db.get_tickets_df(location="Koreatown")) == 2
+
+
+# --- excluded order sources ---------------------------------------------------
+
+def _delivery_and_walkins(db):
+    """A day of counter orders plus the three delivery platforms."""
+    walk = make_tickets("2026-09-01", [100, 200, 300], source="Register")
+    dash = make_tickets("2026-09-01", [900], source="DoorDash")
+    uber = make_tickets("2026-09-01", [800], source="Uber Eats")
+    post = make_tickets("2026-09-01", [700], source="Postmates")
+    df = pd.concat([walk, dash, uber, post], ignore_index=True)
+    db.save_day_tickets("2026-09-01", df, "Gardena")
+
+
+def test_delivery_sources_drop_out_of_every_query(db):
+    _delivery_and_walkins(db)
+    db.set_setting(db.EXCLUDED_SOURCES_KEY, "uber, doordash, postmates")
+
+    assert len(db.get_tickets_df()) == 3
+    assert db.count_tickets() == 3
+    assert db.get_daily_summary()[0]["total"] == 3
+    # The 900s DoorDash ticket would otherwise be the longest of the day.
+    assert db.get_daily_summary()[0]["longest_seconds"] == 300
+    assert db.get_duration_percentile(q=90) == 300
+    assert [r["source"] for r in db.get_source_daily_summary()] == ["Register"]
+
+
+def test_source_matching_is_case_and_spacing_tolerant(db):
+    """Square writes "Uber Eats"; nobody types it that way in a settings box."""
+    _delivery_and_walkins(db)
+    db.set_setting(db.EXCLUDED_SOURCES_KEY, "UBER")
+    sources = {r["source"] for r in db.get_source_daily_summary()}
+    assert "Uber Eats" not in sources
+    assert "DoorDash" in sources          # only what was asked for
+
+
+def test_item_and_source_rules_combine(db):
+    db.save_day_tickets("2026-09-01", pd.concat([
+        make_tickets("2026-09-01", [100], source="Register", items="Latte"),
+        make_tickets("2026-09-01", [900], source="DoorDash", items="Latte"),
+        make_tickets("2026-09-01", [3000], source="Register", items="Cream Batch"),
+    ], ignore_index=True), "Gardena")
+
+    db.set_setting(db.EXCLUDED_ITEMS_KEY, "cream")
+    db.set_setting(db.EXCLUDED_SOURCES_KEY, "doordash")
+    kept = db.get_tickets_df()
+    assert len(kept) == 1 and int(kept.iloc[0]["duration"]) == 100
+
+
+def test_a_ticket_with_no_source_is_never_excluded(db):
+    db.save_day_tickets("2026-09-01",
+                        make_tickets("2026-09-01", [100], source=""), "Gardena")
+    db.set_setting(db.EXCLUDED_SOURCES_KEY, "uber")
+    assert len(db.get_tickets_df()) == 1
+
+
+def test_source_exclusions_apply_to_both_locations(db):
+    for loc in ("Gardena", "Koreatown"):
+        db.save_day_tickets("2026-09-01", pd.concat([
+            make_tickets("2026-09-01", [100] * 2, source="Register"),
+            make_tickets("2026-09-01", [900], source="Uber Eats"),
+        ], ignore_index=True), loc)
+
+    db.set_setting(db.EXCLUDED_SOURCES_KEY, "uber")
+    assert len(db.get_tickets_df(location="Gardena")) == 2
+    assert len(db.get_tickets_df(location="Koreatown")) == 2
+
+
+def test_known_sources_lists_what_is_really_there(db):
+    """Guessing between "Uber Eats" and "UberEats" is how a rule matches nothing."""
+    _delivery_and_walkins(db)
+    got = db.get_known_order_sources()
+    assert got[0] == {"source": "Register", "tickets": 3}     # busiest first
+    assert {s["source"] for s in got} == {
+        "Register", "DoorDash", "Uber Eats", "Postmates"}
+
+
+def test_known_sources_still_lists_an_excluded_source(db):
+    """You have to be able to see the source you are excluding."""
+    _delivery_and_walkins(db)
+    db.set_setting(db.EXCLUDED_SOURCES_KEY, "uber")
+    assert "Uber Eats" in {s["source"] for s in db.get_known_order_sources()}
+
+
+def test_summary_reports_source_exclusions(db):
+    _delivery_and_walkins(db)
+    got = db.get_excluded_ticket_summary([], ["uber", "doordash", "postmates"])
+    assert got["count"] == 3
+    assert got["sources"] == ["uber", "doordash", "postmates"]
+    assert all(s["order_source"] in ("DoorDash", "Uber Eats", "Postmates")
+               for s in got["sample"])

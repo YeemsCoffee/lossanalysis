@@ -17,8 +17,9 @@ from .db import (
     create_reset_token, get_valid_reset_token, mark_token_used,
     update_user_password, bulk_assign_location,
     get_targets, get_setting, set_setting,
-    get_excluded_item_keywords, get_excluded_ticket_summary,
-    EXCLUDED_ITEMS_KEY,
+    get_excluded_item_keywords, get_excluded_order_sources,
+    get_excluded_ticket_summary, get_known_order_sources,
+    EXCLUDED_ITEMS_KEY, EXCLUDED_SOURCES_KEY,
 )
 import io
 import json
@@ -210,11 +211,11 @@ def analyze():
             # Store every ticket, analyse only the real orders — the excluded
             # rows stay on file so the rule can change without a re-upload.
             save_day_tickets(iso, day_df, location)
-            kept = drop_excluded_items(day_df, get_excluded_item_keywords())
+            kept = drop_excluded_items(day_df, get_excluded_item_keywords(),
+                                       get_excluded_order_sources())
             if kept.empty:
-                flash("Every ticket in that file matched an excluded item "
-                      "keyword, so there is nothing to report. Check the "
-                      "keywords under Settings.", "error")
+                flash("Every ticket in that file was excluded by the rules "
+                      "under Settings, so there is nothing to report.", "error")
                 return redirect(url_for("main.index"))
             result = analyze_df(kept, target_seconds=targets["target_seconds"], target_pct=targets["target_pct"])
             return render_template("results.html", **result, iso_date=iso,
@@ -758,18 +759,25 @@ def admin_settings():
         action = request.form.get("action", "target")
 
         if action in ("exclusions", "preview"):
-            raw = request.form.get("excluded_items", "")
-            keywords = [k.strip().lower() for k in raw.split(",") if k.strip()]
+            def _split(field):
+                return [k.strip().lower()
+                        for k in request.form.get(field, "").split(",") if k.strip()]
+
+            keywords = _split("excluded_items")
+            sources  = _split("excluded_sources")
+
             if action == "preview":
-                preview = get_excluded_ticket_summary(keywords)
+                preview = get_excluded_ticket_summary(keywords, sources)
             else:
                 set_setting(EXCLUDED_ITEMS_KEY, ", ".join(keywords))
-                hit = get_excluded_ticket_summary(keywords)["count"]
-                flash(
-                    f"Excluding {hit:,} ticket{'s' if hit != 1 else ''} matching "
-                    f"{', '.join(keywords)}." if keywords else
-                    "Item exclusions cleared — every ticket now counts.",
-                    "success")
+                set_setting(EXCLUDED_SOURCES_KEY, ", ".join(sources))
+                hit = get_excluded_ticket_summary(keywords, sources)["count"]
+                if keywords or sources:
+                    flash(f"Excluding {hit:,} ticket{'s' if hit != 1 else ''} "
+                          f"from the figures.", "success")
+                else:
+                    flash("Exclusions cleared — every ticket now counts.",
+                          "success")
                 return redirect(url_for("main.admin_settings"))
         else:
             minutes = int(request.form.get("minutes", 4))
@@ -784,11 +792,15 @@ def admin_settings():
     targets = get_targets()
     ts = targets["target_seconds"]
     saved_keywords = get_excluded_item_keywords()
+    saved_sources  = get_excluded_order_sources()
     return render_template("admin_settings.html",
         target_minutes=ts // 60,
         target_seconds_rem=ts % 60,
         target_pct=targets["target_pct"],
         excluded_items=", ".join(saved_keywords),
-        excluded_summary=preview or get_excluded_ticket_summary(saved_keywords),
+        excluded_sources=", ".join(saved_sources),
+        known_sources=get_known_order_sources(),
+        excluded_summary=preview or get_excluded_ticket_summary(saved_keywords,
+                                                                saved_sources),
         is_preview=preview is not None,
     )

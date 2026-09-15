@@ -532,24 +532,37 @@ def save_day_tickets(report_date: str, df: pd.DataFrame, location: str = None):
             cur.executemany(insert_sql, rows)
 
 
-EXCLUDED_ITEMS_KEY = "excluded_item_keywords"
+EXCLUDED_ITEMS_KEY   = "excluded_item_keywords"
+EXCLUDED_SOURCES_KEY = "excluded_order_sources"
+
+# Two ways a ticket can fail to be a customer order this kitchen should be
+# judged on, each matched against a different column:
+#
+#   items         prep work that runs through the kitchen display, such as
+#                 making creams at Gardena before open
+#   order_source  third-party delivery, where the clock keeps running while
+#                 a courier who has not arrived yet is waited on, so the
+#                 ticket time measures the platform rather than the kitchen
 
 
-def get_excluded_item_keywords() -> list:
-    """
-    Item-name fragments that mark a ticket as not a customer order.
-
-    Prep work that runs through the kitchen display — making creams at
-    Gardena before open — is a real ticket to Square but not a real order,
-    and counting it drags the day's numbers around.
-    """
-    raw = get_setting(EXCLUDED_ITEMS_KEY, "") or ""
+def _get_keywords(key: str) -> list:
+    raw = get_setting(key, "") or ""
     return [k.strip().lower() for k in raw.split(",") if k.strip()]
 
 
-def _exclusion_clause(keywords) -> tuple:
+def get_excluded_item_keywords() -> list:
+    """Item-name fragments that mark a ticket as prep work, not an order."""
+    return _get_keywords(EXCLUDED_ITEMS_KEY)
+
+
+def get_excluded_order_sources() -> list:
+    """Order-source fragments that mark a ticket as third-party delivery."""
+    return _get_keywords(EXCLUDED_SOURCES_KEY)
+
+
+def _exclusion_clause(item_keywords=None, source_keywords=None) -> tuple:
     """
-    SQL rejecting tickets whose items match any keyword. Returns (sql, params).
+    SQL rejecting tickets matching any keyword. Returns (sql, params).
 
     Applied at query time rather than stamped on the row at import, so
     changing the rule re-scores every day at once — no re-sync, no
@@ -559,11 +572,17 @@ def _exclusion_clause(keywords) -> tuple:
     case-sensitive on Postgres, and a rule that worked locally but not in
     production would be a nasty thing to discover from a dashboard.
     """
-    if not keywords:
+    terms, params = [], []
+    for keywords, column in ((item_keywords, "items"),
+                             (source_keywords, "order_source")):
+        for keyword in keywords or []:
+            # COALESCE: a ticket with the column blank is missing data, not a
+            # match. Dropping those would quietly lose real orders.
+            terms.append(f"LOWER(COALESCE({column}, '')) LIKE ?")
+            params.append(f"%{keyword}%")
+    if not terms:
         return "", []
-    # COALESCE: a ticket with no items recorded is a real ticket, not a match.
-    terms = " OR ".join(["LOWER(COALESCE(items, '')) LIKE ?"] * len(keywords))
-    return f"NOT ({terms})", [f"%{k}%" for k in keywords]
+    return f"NOT ({' OR '.join(terms)})", params
 
 
 def _ticket_filters(from_date: str = None, to_date: str = None,
@@ -580,7 +599,8 @@ def _ticket_filters(from_date: str = None, to_date: str = None,
         conditions.append("location = ?")
         params.append(location)
     if not include_excluded:
-        clause, kw_params = _exclusion_clause(get_excluded_item_keywords())
+        clause, kw_params = _exclusion_clause(get_excluded_item_keywords(),
+                                              get_excluded_order_sources())
         if clause:
             conditions.append(clause)
             params.extend(kw_params)
@@ -810,22 +830,50 @@ def get_tickets_df(from_date: str = None, to_date: str = None,
     return df
 
 
-def get_excluded_ticket_summary(keywords=None, limit: int = 25) -> dict:
+def get_known_order_sources() -> list:
     """
-    What the exclusion rule is currently throwing away.
+    Every order source present in the data, with how many tickets each has.
+
+    Third-party delivery arrives under whatever name Square gives it, and
+    guessing between "Uber Eats", "UberEats" and "Uber Eats Marketplace" from
+    memory is how an exclusion rule silently matches nothing. Shown on the
+    settings page so the rule can be written against what is really there.
+
+    Deliberately ignores the exclusion rules: the sources you want to exclude
+    must stay visible in the list you pick them from.
+    """
+    _ensure_schema()
+    with _get_cursor() as cur:
+        cur.execute("""
+            SELECT TRIM(order_source) AS source, COUNT(*) AS n
+              FROM tickets
+             WHERE order_source IS NOT NULL AND TRIM(order_source) <> ''
+          GROUP BY TRIM(order_source)
+          ORDER BY COUNT(*) DESC
+        """)
+        return [{"source": dict(r)["source"], "tickets": int(dict(r)["n"])}
+                for r in cur.fetchall()]
+
+
+def get_excluded_ticket_summary(keywords=None, sources=None,
+                                limit: int = 25) -> dict:
+    """
+    What the exclusion rules are currently throwing away.
 
     A rule you cannot see the effect of is a rule you cannot trust, so the
     settings page shows the count and a sample before anyone relies on the
-    numbers it changes. Takes keywords so an admin can preview a rule they
-    have typed but not yet saved.
+    numbers it changes. Takes the keywords so an admin can preview a rule
+    they have typed but not yet saved.
     """
     if keywords is None:
         keywords = get_excluded_item_keywords()
-    if not keywords:
-        return {"count": 0, "sample": [], "keywords": []}
+    if sources is None:
+        sources = get_excluded_order_sources()
+    if not keywords and not sources:
+        return {"count": 0, "sample": [], "keywords": [], "sources": []}
 
     _ensure_schema()
-    clause, params = _exclusion_clause(keywords)
+    clause, params = _exclusion_clause(keywords, sources)
     # _exclusion_clause says what to keep; here we want what it removes.
     where = f" WHERE NOT ({clause})"
 
@@ -834,15 +882,16 @@ def get_excluded_ticket_summary(keywords=None, limit: int = 25) -> dict:
         count = int(dict(cur.fetchone())["n"] or 0)
 
         cur.execute(_adapt(f"""
-            SELECT report_date, location, ticket_name, items, duration,
-                   time_created
+            SELECT report_date, location, ticket_name, items, order_source,
+                   duration, time_created
               FROM tickets{where}
           ORDER BY report_date DESC, time_created DESC
              LIMIT {int(limit)}
         """), params)
         sample = [dict(r) for r in cur.fetchall()]
 
-    return {"count": count, "sample": sample, "keywords": list(keywords)}
+    return {"count": count, "sample": sample,
+            "keywords": list(keywords), "sources": list(sources)}
 
 
 def get_date_bounds() -> tuple:
