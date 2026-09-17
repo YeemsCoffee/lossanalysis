@@ -1,4 +1,5 @@
 """Routes: auth, authorization, CSRF, upload, and the reporting pages."""
+import datetime as dt
 import io
 import re
 
@@ -844,3 +845,72 @@ def test_saving_one_rule_does_not_wipe_the_other(client, sqlite_db):
 
     assert sqlite_db.get_excluded_item_keywords() == ["cream"]
     assert sqlite_db.get_excluded_order_sources() == ["uber"]
+
+
+# --- history date presets -----------------------------------------------------
+
+def test_history_offers_date_shortcuts(client, sqlite_db):
+    login(client)
+    today = dt.date.today()
+    sqlite_db.save_day_tickets(today.isoformat(),
+                               make_tickets(today.isoformat(), [100]), "Gardena")
+
+    html = client.get("/history").get_data(as_text=True)
+    for label in ("Today", "Yesterday", "This week", "Last week",
+                  "Last 30 days", "All time"):
+        assert f">{label}</a>" in html, f"missing preset {label}"
+
+
+def test_presets_use_the_real_calendar_not_the_newest_data(client, sqlite_db):
+    """"Yesterday" must mean yesterday even if the store was shut then."""
+    login(client)
+    old = (dt.date.today() - dt.timedelta(days=30)).isoformat()
+    sqlite_db.save_day_tickets(old, make_tickets(old, [100]), "Gardena")
+
+    html = client.get("/history").get_data(as_text=True)
+    yesterday = (dt.date.today() - dt.timedelta(days=1)).isoformat()
+    assert f"from={yesterday}&amp;to={yesterday}" in html
+
+
+def test_a_preset_click_keeps_the_location_filter(client, sqlite_db):
+    """Clicking Yesterday from the Gardena tab must not silently widen to both."""
+    login(client)
+    today = dt.date.today().isoformat()
+    sqlite_db.save_day_tickets(today, make_tickets(today, [100]), "Gardena")
+
+    html = client.get("/history?location=Gardena").get_data(as_text=True)
+    assert "location=Gardena" in html and "from=" in html
+
+
+def test_an_empty_range_still_shows_the_shortcuts(client, sqlite_db):
+    """
+    A preset can land on days with no tickets. Without the picker still on
+    screen there is no way back except editing the URL.
+    """
+    login(client)
+    today = dt.date.today().isoformat()
+    sqlite_db.save_day_tickets(today, make_tickets(today, [100]), "Gardena")
+
+    future = (dt.date.today() + dt.timedelta(days=5)).isoformat()
+    html = client.get(f"/history?from={future}&to={future}").get_data(as_text=True)
+
+    assert "Yesterday</a>" in html            # shortcuts still there
+    assert "No tickets between" in html
+    assert "No data yet" not in html          # not the never-uploaded state
+
+
+def test_the_never_uploaded_state_is_unchanged(client, sqlite_db):
+    login(client)
+    html = client.get("/history").get_data(as_text=True)
+    assert "No data yet" in html
+    assert "Yesterday</a>" not in html        # nothing to filter yet
+
+
+def test_the_active_preset_is_marked(client, sqlite_db):
+    login(client)
+    today = dt.date.today().isoformat()
+    sqlite_db.save_day_tickets(today, make_tickets(today, [100]), "Gardena")
+
+    html = client.get(f"/history?from={today}&to={today}").get_data(as_text=True)
+    active = re.search(r'background:var\(--green\)[^>]*>\s*Today\s*</a>', html)
+    assert active, "the Today shortcut should show as selected"

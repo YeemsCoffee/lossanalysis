@@ -271,6 +271,36 @@ def day(date):
 # History
 # ---------------------------------------------------------------------------
 
+def _date_presets(from_date, to_date, earliest, latest):
+    """
+    One-click ranges for the History picker.
+
+    Anchored on the real calendar rather than on the newest day with data:
+    "Yesterday" has to mean yesterday even when yesterday was closed, or the
+    label lies. A preset covering days with no tickets lands on the empty
+    state, which keeps the picker on screen so the next one is one click away.
+
+    "This week" runs Monday to today, matching how a week is talked about in
+    the store rather than a rolling seven days.
+    """
+    today     = date.today()
+    yesterday = today - timedelta(days=1)
+    monday    = today - timedelta(days=today.weekday())
+
+    ranges = [
+        ("Today",        today,                     today),
+        ("Yesterday",    yesterday,                 yesterday),
+        ("This week",    monday,                    today),
+        ("Last week",    monday - timedelta(days=7), monday - timedelta(days=1)),
+        ("Last 30 days", today - timedelta(days=29), today),
+        # Not "All": the location tabs directly above already have an All.
+        ("All time",     date.fromisoformat(earliest), date.fromisoformat(latest)),
+    ]
+    return [{"label": label, "from": start.isoformat(), "to": end.isoformat(),
+             "active": from_date == start.isoformat() and to_date == end.isoformat()}
+            for label, start, end in ranges]
+
+
 @bp.route("/history")
 @login_required
 def history():
@@ -285,12 +315,14 @@ def history():
                                sync=_sync_banner(),
                                from_date=None, to_date=None,
                                earliest=None, latest=None,
+                               presets=[],
                                location=location, locations=LOCATIONS,
                                target_fmt=target_fmt, target_pct=target_pct,
                                targets=targets)
 
     from_date = request.args.get("from", earliest)
     to_date   = request.args.get("to",   latest)
+    presets   = _date_presets(from_date, to_date, earliest, latest)
 
     loc = location if location else None
     tgt = targets["target_seconds"]
@@ -305,6 +337,7 @@ def history():
                                sync=_sync_banner(),
                                from_date=from_date, to_date=to_date,
                                earliest=earliest, latest=latest,
+                               presets=presets,
                                location=location, locations=LOCATIONS,
                                target_fmt=target_fmt, target_pct=target_pct,
                                targets=targets)
@@ -457,6 +490,7 @@ def history():
         to_date=to_date,
         earliest=earliest,
         latest=latest,
+        presets=presets,
         period_days=len(rows),
         total_tickets=total_tickets,
         total_over=total_over,

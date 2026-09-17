@@ -23,7 +23,7 @@
   {% endfor %}
 </div>
 
-{% if not rows %}
+{% if not earliest %}
   <div class="section" style="text-align:center; padding:60px; color:var(--gray);">
     <div style="font-size:48px; margin-bottom:16px;">📭</div>
     <div style="font-size:18px; font-weight:700; color:var(--green);">No data yet</div>
@@ -34,6 +34,19 @@
 
 <!-- Date range picker -->
 <div class="section" style="padding:16px 24px; margin-bottom:16px;">
+  {% if presets %}
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;">
+      {% for p in presets %}
+        <a href="{{ url_for('main.history', **dict({'from': p['from'], 'to': p.to},
+                                                   **({'location': location} if location else {}))) }}"
+           style="padding:6px 14px; border-radius:16px; font-size:13px; font-weight:700;
+                  text-decoration:none; border:2px solid var(--gray-light);
+                  {% if p.active %}background:var(--green); color:var(--cream);
+                                   border-color:var(--green);
+                  {% else %}color:var(--green);{% endif %}">{{ p.label }}</a>
+      {% endfor %}
+    </div>
+  {% endif %}
   <form method="get" action="{{ url_for('main.history') }}"
         style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
     {% if location %}
@@ -59,6 +72,19 @@
     {% endif %}
   </form>
 </div>
+
+{% if not rows %}
+  <div class="section" style="text-align:center; padding:48px; color:var(--gray);">
+    <div style="font-size:40px; margin-bottom:12px;">🗓</div>
+    <div style="font-size:17px; font-weight:700; color:var(--green);">
+      No tickets between {{ from_date }} and {{ to_date }}{% if location %} at {{ location }}{% endif %}
+    </div>
+    <div style="margin-top:8px;">
+      The store may have been closed, or the data may not have synced yet.
+      Pick another range above.
+    </div>
+  </div>
+{% else %}
 
 <!-- Period summary cards -->
 <div class="stat-grid">
@@ -176,6 +202,7 @@
   </div>
 </div>
 
+{% endif %}
 {% endif %}
 {% endblock %}
 
