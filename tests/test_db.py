@@ -542,3 +542,42 @@ def test_summary_reports_source_exclusions(db):
     assert got["sources"] == ["uber", "doordash", "postmates"]
     assert all(s["order_source"] in ("DoorDash", "Uber Eats", "Postmates")
                for s in got["sample"])
+
+
+# --- monthly summary ------------------------------------------------------------
+
+def test_monthly_summary_pools_tickets_across_the_month(db):
+    """A quiet day must not weigh as much as a slammed one."""
+    db.save_day_tickets("2026-08-01", make_tickets("2026-08-01", [OVER] * 2), "Gardena")
+    db.save_day_tickets("2026-08-02", make_tickets("2026-08-02", [OK] * 18), "Gardena")
+    got = db.get_monthly_summary(target_seconds=TARGET)
+    assert len(got) == 1
+    m = got[0]
+    assert (m["month"], m["total"], m["over_count"], m["days"]) == ("2026-08", 20, 2, 2)
+    # Pooled: 18/20 = 90%. Averaging the two daily rates would say 50%.
+
+
+def test_monthly_summary_is_oldest_first_and_per_location(db):
+    for d in ("2026-07-05", "2026-09-05", "2026-08-05"):
+        db.save_day_tickets(d, make_tickets(d, [OK]), "Gardena")
+    db.save_day_tickets("2026-08-05", make_tickets("2026-08-05", [OK] * 3), "Koreatown")
+
+    assert [m["month"] for m in db.get_monthly_summary()] == ["2026-07", "2026-08", "2026-09"]
+    kt = db.get_monthly_summary(location="Koreatown")
+    assert [(m["month"], m["total"]) for m in kt] == [("2026-08", 3)]
+
+
+def test_monthly_summary_honours_exclusions(db):
+    db.save_day_tickets("2026-08-01", pd.concat([
+        make_tickets("2026-08-01", [OK] * 3, source="Register"),
+        make_tickets("2026-08-01", [900], source="DoorDash"),
+    ], ignore_index=True), "Gardena")
+    db.set_setting(db.EXCLUDED_SOURCES_KEY, "doordash")
+    assert db.get_monthly_summary()[0]["total"] == 3
+
+
+def test_p90_groups_per_month(db):
+    db.save_day_tickets("2026-08-01", make_tickets("2026-08-01", [100] * 9 + [900]), "Gardena")
+    db.save_day_tickets("2026-09-01", make_tickets("2026-09-01", [200] * 9 + [800]), "Gardena")
+    assert db.get_duration_percentile(group_by="month", q=90) == {
+        "2026-08": 100, "2026-09": 200}

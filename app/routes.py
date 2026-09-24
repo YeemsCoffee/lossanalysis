@@ -11,6 +11,7 @@ from .analysis import (
 from .db import (
     save_day_tickets, get_tickets_df, get_date_bounds, get_distinct_dates,
     get_daily_summary, get_source_daily_summary, get_hourly_daily_summary,
+    get_monthly_summary,
     count_tickets, get_sync_status, get_duration_percentile,
     get_user_by_email, update_last_login,
     create_user, list_users, set_user_active, update_user_location,
@@ -643,6 +644,48 @@ def patterns():
         "comparison": json.dumps(result["comparison"]["chart"]),
     }
     return render_template("patterns.html", patterns=result, charts=charts, **base)
+
+
+# ---------------------------------------------------------------------------
+# Trends (month over month)
+# ---------------------------------------------------------------------------
+
+@bp.route("/trends")
+@login_required
+def trends():
+    from .analysis_patterns import monthly_trend
+
+    location   = request.args.get("location", "")
+    loc        = location if location in LOCATIONS else None
+    targets    = get_targets()
+    tgt        = targets["target_seconds"]
+    target_pct = targets["target_pct"]
+
+    base = dict(location=loc or "", locations=LOCATIONS,
+                target_fmt=fmt_time(tgt), target_pct=target_pct,
+                target_seconds=tgt)
+
+    # All of history, deliberately: the point of this page is the long view,
+    # and a row per month stays small however far back the data goes.
+    rows = get_monthly_summary(location=loc, target_seconds=tgt)
+    if not rows:
+        return render_template("trends.html", trend=None, **base)
+
+    p90 = get_duration_percentile(location=loc, group_by="month", q=90)
+
+    # On the All tab, draw each store as its own line under the combined one,
+    # so a gain at one location cannot hide a slide at the other.
+    lines = None
+    if not loc:
+        lines = {"All locations": rows}
+        for name in LOCATIONS:
+            per = get_monthly_summary(location=name, target_seconds=tgt)
+            if per:
+                lines[name] = per
+
+    trend  = monthly_trend(rows, p90, target_pct, tgt, lines=lines)
+    charts = {k: json.dumps(v) for k, v in trend["chart"].items()}
+    return render_template("trends.html", trend=trend, charts=charts, **base)
 
 
 # ---------------------------------------------------------------------------

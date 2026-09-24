@@ -7,6 +7,7 @@ returns (get_daily_summary / get_hourly_daily_summary), so adding these
 views costs no extra ticket-level work.
 """
 
+import calendar
 from datetime import date
 
 from .analysis import fmt_hour, fmt_time
@@ -196,3 +197,102 @@ def location_comparison(daily_by_location, target_pct, p90_by_location=None):
             "leader": stats[0] if stats else None,
             "laggard": stats[-1] if len(stats) > 1 else None,
             "has_data": len(stats) > 1}
+
+
+# ---------------------------------------------------------------------------
+# Month over month
+# ---------------------------------------------------------------------------
+
+_LINE_COLOURS = {"All locations": "#2B4628", "Gardena": "#9bc1cb",
+                 "Koreatown": "#d97706"}
+
+
+def _month_label(key):
+    """'2026-09' -> 'Sep 2026'."""
+    return date.fromisoformat(f"{key}-01").strftime("%b %Y")
+
+
+def monthly_trend(rows, p90_by_month, target_pct, target_seconds,
+                  lines=None, today=None):
+    """
+    Month-by-month progress for one location (or both combined).
+
+    rows:          get_monthly_summary() output, oldest first
+    p90_by_month:  {"YYYY-MM": seconds} from get_duration_percentile
+    lines:         optional {series name: monthly rows} to draw several
+                   locations on one chart; defaults to just `rows`
+
+    The month in progress is flagged "to date" rather than compared as if it
+    were finished: two good days in a new month would otherwise read as a
+    leap, and two bad ones as a collapse.
+    """
+    today   = today or date.today()
+    current = today.strftime("%Y-%m")
+
+    table, prev_pct = [], None
+    for r in rows:
+        pct = round(_on_time_pct(r["total"], r["over_count"]), 1)
+        p90 = p90_by_month.get(r["month"], 0)
+        table.append({
+            "month":         r["month"],
+            "label":         _month_label(r["month"]),
+            # First and last calendar day, for the drill-down into History.
+            "from":          f"{r['month']}-01",
+            "to":            "{}-{:02d}".format(r["month"], calendar.monthrange(
+                                 int(r["month"][:4]), int(r["month"][5:7]))[1]),
+            "tickets":       r["total"],
+            "days":          r["days"],
+            "avg_per_day":   round(r["total"] / r["days"]) if r["days"] else 0,
+            "pct_on_target": pct,
+            "avg_fmt":       fmt_time(r["avg_seconds"]),
+            "p90_seconds":   p90,
+            "p90_fmt":       fmt_time(p90),
+            "p90_over":      p90 > target_seconds,
+            "to_date":       r["month"] == current,
+            "meets_goal":    pct >= target_pct,
+            # Change against the month before, in percentage points. None for
+            # the first month on record — there is nothing to compare with.
+            "delta":         None if prev_pct is None else round(pct - prev_pct, 1),
+        })
+        prev_pct = pct
+
+    # Headline: latest complete month against the one before it. A month in
+    # progress is not a fair comparison, so step back past it if needed.
+    complete = [t for t in table if not t["to_date"]]
+    latest   = complete[-1] if complete else None
+    previous = complete[-2] if len(complete) > 1 else None
+    best     = max(complete, key=lambda t: t["pct_on_target"]) if complete else None
+
+    # ---- charts --------------------------------------------------------------
+    series = lines or {"On-target %": rows}
+    rate_traces = []
+    for name, series_rows in series.items():
+        x = [_month_label(r["month"]) for r in series_rows]
+        y = [round(_on_time_pct(r["total"], r["over_count"]), 1) for r in series_rows]
+        rate_traces.append({
+            "x": x, "y": y, "name": name,
+            "type": "scatter", "mode": "lines+markers",
+            "line": {"color": _LINE_COLOURS.get(name, "#2B4628"),
+                     "width": 4 if name in ("All locations", "On-target %") else 2},
+            "marker": {"size": 9},
+            "hovertemplate": f"{name}<br>%{{x}}<br><b>%{{y:.1f}}%</b> on target<extra></extra>",
+        })
+
+    p90_trace = [{
+        "x": [t["label"] for t in table],
+        "y": [t["p90_seconds"] for t in table],
+        "type": "bar",
+        "marker": {"color": ["#dc2626" if t["p90_over"] else "#2B4628" for t in table]},
+        "text": [t["p90_fmt"] for t in table],
+        "textposition": "outside",
+        "hovertemplate": "%{x}<br>90th percentile <b>%{text}</b><extra></extra>",
+    }]
+
+    return {
+        "table":    list(reversed(table)),     # newest first for reading
+        "latest":   latest,
+        "previous": previous,
+        "best":     best,
+        "months":   len(table),
+        "chart":    {"rate": rate_traces, "p90": p90_trace},
+    }

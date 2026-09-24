@@ -648,11 +648,54 @@ def get_daily_summary(from_date: str = None, to_date: str = None,
     return rows
 
 
+# "YYYY-MM" out of the stored "YYYY-MM-DD" report_date. substr() with this
+# signature behaves identically on SQLite and Postgres.
+_MONTH_EXPR = "substr(report_date, 1, 7)"
+
+
+def get_monthly_summary(location: str = None, target_seconds: int = 294) -> list:
+    """
+    Per-month totals, oldest first.
+
+    On-time rate is pooled — over-target tickets divided by all tickets in
+    the month — not the mean of the daily rates. For a monthly trend that is
+    the honest number: a quiet Sunday should not weigh as much as a slammed
+    Saturday when judging the month.
+
+    `days` is how many days in the month have data, so a partial month (the
+    one in progress, or the first month on record) can be labelled as such
+    instead of being mistaken for a slump or a spike.
+    """
+    _ensure_schema()
+    where, params = _ticket_filters(location=location)
+    sql = f"""
+        SELECT {_MONTH_EXPR}              AS month,
+               COUNT(*)                   AS total,
+               {_OVER_EXPR}               AS over_count,
+               AVG(duration * 1.0)        AS avg_seconds,
+               COUNT(DISTINCT report_date) AS days
+          FROM tickets{where}
+      GROUP BY {_MONTH_EXPR}
+      ORDER BY {_MONTH_EXPR} ASC
+    """
+    with _get_cursor() as cur:
+        cur.execute(_adapt(sql), [target_seconds] + params)
+        rows = [dict(r) for r in cur.fetchall()]
+
+    for r in rows:
+        r["total"]       = int(r["total"])
+        r["over_count"]  = int(r["over_count"] or 0)
+        r["avg_seconds"] = float(r["avg_seconds"] or 0)
+        r["days"]        = int(r["days"])
+    return rows
+
+
 # Which columns a percentile may be grouped by. A whitelist rather than an
 # f-string of whatever the caller passed: this goes straight into SQL.
 _PERCENTILE_GROUPS = {
     "report_date": "report_date",
     "location":    "location",
+    "month":       _MONTH_EXPR,
 }
 
 

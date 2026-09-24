@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% block title %}Trends · Yeems Coffee{% endblock %}
+
+{% block head_extra %}
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="results-header">
+  <h1>Monthly Trends</h1>
+  <div class="date">Month-over-month progress · target {{ target_fmt }} · {{ target_pct }}% goal{% if location %} · {{ location }}{% endif %}</div>
+</div>
+
+<!-- Location filter tabs -->
+<div class="location-tabs">
+  <a href="{{ url_for('main.trends') }}"
+     class="location-tab {% if not location %}active{% endif %}">All</a>
+  {% for loc in locations %}
+    <a href="{{ url_for('main.trends', location=loc) }}"
+       class="location-tab {% if location == loc %}active{% endif %}">{{ loc }}</a>
+  {% endfor %}
+</div>
+
+{% if not trend %}
+  <div class="section" style="text-align:center; padding:60px; color:var(--gray);">
+    <div style="font-size:48px; margin-bottom:16px;">📈</div>
+    <div style="font-size:18px; font-weight:700; color:var(--green);">No data yet</div>
+    <div style="margin-top:8px;">Monthly trends appear once there are tickets on record.</div>
+    <a href="{{ url_for('main.index') }}" class="btn" style="width:auto; display:inline-block; margin-top:24px; padding:12px 28px;">Upload a Report</a>
+  </div>
+{% else %}
+
+<!-- Headline -->
+<div class="stat-grid">
+  {% if trend.latest %}
+    {% set l = trend.latest %}
+    <div class="stat-card {% if not l.meets_goal %}{% if l.pct_on_target < target_pct - 15 %}danger{% else %}amber{% endif %}{% endif %}">
+      <div class="label">{{ l.label }} On-Target</div>
+      <div class="value">{{ l.pct_on_target }}%</div>
+      <div class="sub">
+        {% if l.delta is not none %}
+          {% if l.delta > 0 %}▲ {{ l.delta }} pts{% elif l.delta < 0 %}▼ {{ l.delta | abs }} pts{% else %}no change{% endif %}
+          vs {{ trend.previous.label if trend.previous else "prior month" }}
+        {% else %}first month on record{% endif %}
+      </div>
+    </div>
+    <div class="stat-card {% if l.p90_over %}amber{% endif %}">
+      <div class="label">{{ l.label }} 90th %ile</div>
+      <div class="value">{{ l.p90_fmt }}</div>
+      <div class="sub">9 in 10 tickets beat this</div>
+    </div>
+  {% endif %}
+  {% if trend.best %}
+    <div class="stat-card">
+      <div class="label">Best Month</div>
+      <div class="value" style="font-size:22px;">{{ trend.best.pct_on_target }}%</div>
+      <div class="sub">{{ trend.best.label }}</div>
+    </div>
+  {% endif %}
+  <div class="stat-card">
+    <div class="label">Months on Record</div>
+    <div class="value">{{ trend.months }}</div>
+  </div>
+</div>
+
+<!-- On-target % by month -->
+<div class="section">
+  <h2>📈 On-Target Rate by Month</h2>
+  <div class="section-sub">
+    Share of each month's tickets closed at or under {{ target_fmt }}. Dotted line = {{ target_pct }}% goal.
+    {% if not location %}Each store is drawn separately so a gain at one can't hide a slide at the other.{% endif %}
+  </div>
+  <div id="rate-chart" class="chart"></div>
+</div>
+
+<!-- p90 by month -->
+<div class="section">
+  <h2>⏱ 90th Percentile by Month</h2>
+  <div class="section-sub">
+    How long the slowest tenth of tickets took. Red = above the {{ target_fmt }} target.
+    This moves when the worst waits get shorter, even if the on-target rate barely changes.
+  </div>
+  <div id="p90-chart" class="chart short"></div>
+</div>
+
+<!-- Month-by-month table -->
+<div class="section">
+  <h2>📋 Month by Month</h2>
+  <div class="section-sub">Click a month to open its days in History.</div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Month</th>
+          <th>Days</th>
+          <th>Tickets</th>
+          <th>Per Day</th>
+          <th>On-Target %</th>
+          <th>Change</th>
+          <th>Avg Time</th>
+          <th>90th %ile</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in trend.table %}
+          <tr style="cursor:pointer;"
+              onclick="window.location='{{ url_for('main.history', **dict({'from': m['from'], 'to': m.to}, **({'location': location} if location else {}))) }}'">
+            <td>
+              <strong style="color:var(--green);">{{ m.label }}</strong>
+              {% if m.to_date %}<span style="font-size:11px; color:var(--gray); font-weight:700;"> TO DATE</span>{% endif %}
+            </td>
+            <td>{{ m.days }}</td>
+            <td>{{ "{:,}".format(m.tickets) }}</td>
+            <td>{{ m.avg_per_day }}</td>
+            <td>
+              <span class="duration-cell {% if m.pct_on_target < target_pct - 15 %}over{% elif m.meets_goal %}ok{% endif %}">
+                {{ m.pct_on_target }}%
+              </span>
+            </td>
+            <td style="font-weight:700; {% if m.delta is not none and m.delta > 0 %}color:var(--green);{% elif m.delta is not none and m.delta < 0 %}color:var(--red);{% else %}color:var(--gray);{% endif %}">
+              {% if m.delta is none %}—
+              {% elif m.to_date %}<span style="color:var(--gray); font-weight:400;">in progress</span>
+              {% elif m.delta > 0 %}▲ {{ m.delta }}
+              {% elif m.delta < 0 %}▼ {{ m.delta | abs }}
+              {% else %}0{% endif %}
+            </td>
+            <td class="duration-cell">{{ m.avg_fmt }}</td>
+            <td class="duration-cell {% if m.p90_over %}over{% else %}ok{% endif %}">{{ m.p90_fmt }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if charts %}
+<script>
+  const cfg = { responsive: true, displayModeBar: false };
+  const layout = (extra = {}) => Object.assign({
+    margin: { l: 60, r: 20, t: 10, b: 60 },
+    paper_bgcolor: '#fff',
+    plot_bgcolor: '#fff',
+    font: { family: 'Nunito, sans-serif', color: '#1f2937' },
+    legend: { orientation: 'h', y: -0.25 },
+  }, extra);
+
+  Plotly.newPlot('rate-chart', {{ charts.rate | safe }}, layout({
+    yaxis: { title: 'On-Target %', range: [0, 100], gridcolor: '#e5e7eb' },
+    xaxis: { showgrid: false, type: 'category' },
+    shapes: [{
+      type: 'line', x0: 0, x1: 1, xref: 'paper', y0: {{ target_pct }}, y1: {{ target_pct }},
+      line: { color: '#d97706', width: 1.5, dash: 'dot' }
+    }],
+  }), cfg);
+
+  Plotly.newPlot('p90-chart', {{ charts.p90 | safe }}, layout({
+    yaxis: { title: 'Seconds', gridcolor: '#e5e7eb' },
+    xaxis: { showgrid: false, type: 'category' },
+    showlegend: false,
+    shapes: [{
+      type: 'line', x0: 0, x1: 1, xref: 'paper',
+      y0: {{ target_seconds }}, y1: {{ target_seconds }},
+      line: { color: '#d97706', width: 1.5, dash: 'dot' }
+    }],
+  }), cfg);
+</script>
+{% endif %}
+{% endblock %}

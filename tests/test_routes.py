@@ -914,3 +914,58 @@ def test_the_active_preset_is_marked(client, sqlite_db):
     html = client.get(f"/history?from={today}&to={today}").get_data(as_text=True)
     active = re.search(r'background:var\(--green\)[^>]*>\s*Today\s*</a>', html)
     assert active, "the Today shortcut should show as selected"
+
+
+# --- trends -------------------------------------------------------------------
+
+def test_trends_page_renders_months(client, sqlite_db):
+    login(client)
+    for d in ("2026-07-10", "2026-08-10"):
+        sqlite_db.save_day_tickets(d, make_tickets(d, [100] * 4), "Gardena")
+    html = client.get("/trends").get_data(as_text=True)
+    assert "Jul 2026" in html and "Aug 2026" in html
+
+
+def test_trends_all_tab_draws_each_store(client, sqlite_db):
+    """A gain at one store must not be able to hide a slide at the other."""
+    login(client)
+    sqlite_db.save_day_tickets("2026-08-10", make_tickets("2026-08-10", [100]), "Gardena")
+    sqlite_db.save_day_tickets("2026-08-10", make_tickets("2026-08-10", [100]), "Koreatown")
+    html = client.get("/trends").get_data(as_text=True)
+    for name in ("All locations", "Gardena", "Koreatown"):
+        assert f'"name": "{name}"' in html
+
+
+def test_trends_location_tab_filters(client, sqlite_db):
+    login(client)
+    sqlite_db.save_day_tickets("2026-07-10", make_tickets("2026-07-10", [100]), "Gardena")
+    sqlite_db.save_day_tickets("2026-08-10", make_tickets("2026-08-10", [100]), "Koreatown")
+    html = client.get("/trends?location=Koreatown").get_data(as_text=True)
+    assert "Aug 2026" in html and "Jul 2026" not in html
+
+
+def test_a_month_row_opens_that_month_in_history(client, sqlite_db):
+    login(client)
+    sqlite_db.save_day_tickets("2026-02-10", make_tickets("2026-02-10", [100]), "Gardena")
+    html = client.get("/trends?location=Gardena").get_data(as_text=True)
+    assert "from=2026-02-01" in html and "to=2026-02-28" in html
+    assert "location=Gardena" in html
+
+
+def test_trends_empty_state(client, sqlite_db):
+    login(client)
+    html = client.get("/trends").get_data(as_text=True)
+    assert "No data yet" in html
+
+
+def test_trends_ignores_an_unknown_location(client, sqlite_db):
+    """A hand-edited URL should fall back to All, not return a blank page."""
+    login(client)
+    sqlite_db.save_day_tickets("2026-08-10", make_tickets("2026-08-10", [100]), "Gardena")
+    html = client.get("/trends?location=Nowhere").get_data(as_text=True)
+    assert "Aug 2026" in html
+
+
+def test_trends_requires_login(client):
+    r = client.get("/trends")
+    assert r.status_code in (301, 302) and "/login" in r.headers["Location"]

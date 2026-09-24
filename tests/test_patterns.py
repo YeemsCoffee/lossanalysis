@@ -152,3 +152,61 @@ def test_comparison_with_a_single_location_has_nothing_to_compare():
 def test_comparison_with_no_data_at_all():
     out = location_comparison({"Gardena": [], "Koreatown": []}, 85)
     assert out["stats"] == [] and out["leader"] is None
+
+
+# --- monthly trend ------------------------------------------------------------
+
+from datetime import date as _date
+
+
+def _month(month, total, over, days=20, avg=200.0):
+    return {"month": month, "total": total, "over_count": over,
+            "avg_seconds": avg, "days": days}
+
+
+def test_monthly_trend_computes_change_in_points():
+    from app.analysis_patterns import monthly_trend
+    rows = [_month("2026-06", 100, 40), _month("2026-07", 100, 30),
+            _month("2026-08", 100, 35)]
+    t = monthly_trend(rows, {}, 85, 294, today=_date(2026, 9, 15))
+    by = {m["month"]: m for m in t["table"]}
+    assert by["2026-06"]["delta"] is None          # nothing before it
+    assert by["2026-07"]["delta"] == 10.0          # 60% -> 70%
+    assert by["2026-08"]["delta"] == -5.0          # 70% -> 65%
+
+
+def test_the_month_in_progress_is_not_the_headline():
+    """Two good days into a month must not read as the month's result."""
+    from app.analysis_patterns import monthly_trend
+    rows = [_month("2026-08", 100, 30), _month("2026-09", 10, 0, days=2)]
+    t = monthly_trend(rows, {}, 85, 294, today=_date(2026, 9, 3))
+    assert t["latest"]["month"] == "2026-08"
+    assert [m["to_date"] for m in t["table"]] == [True, False]   # newest first
+    assert t["best"]["month"] == "2026-08"         # 100% to date is not "best"
+
+
+def test_table_reads_newest_first():
+    from app.analysis_patterns import monthly_trend
+    rows = [_month("2026-07", 10, 1), _month("2026-08", 10, 1)]
+    t = monthly_trend(rows, {}, 85, 294, today=_date(2026, 10, 1))
+    assert [m["month"] for m in t["table"]] == ["2026-08", "2026-07"]
+
+
+def test_month_bounds_cover_the_whole_calendar_month():
+    """The drill-down into History needs the true last day, leap years included."""
+    from app.analysis_patterns import monthly_trend
+    rows = [_month("2024-02", 1, 0), _month("2026-02", 1, 0), _month("2026-09", 1, 0)]
+    got = {m["month"]: (m["from"], m["to"])
+           for m in monthly_trend(rows, {}, 85, 294, today=_date(2027, 1, 1))["table"]}
+    assert got["2024-02"] == ("2024-02-01", "2024-02-29")
+    assert got["2026-02"] == ("2026-02-01", "2026-02-28")
+    assert got["2026-09"] == ("2026-09-01", "2026-09-30")
+
+
+def test_p90_is_flagged_against_the_target():
+    from app.analysis_patterns import monthly_trend
+    rows = [_month("2026-07", 10, 1), _month("2026-08", 10, 1)]
+    t = monthly_trend(rows, {"2026-07": 400, "2026-08": 250}, 85, 294,
+                      today=_date(2026, 10, 1))
+    flags = {m["month"]: m["p90_over"] for m in t["table"]}
+    assert flags == {"2026-07": True, "2026-08": False}

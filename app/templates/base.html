@@ -23,6 +23,7 @@
         <nav class="header-nav">
           <a href="{{ url_for('main.index') }}" class="nav-link">Upload</a>
           <a href="{{ url_for('main.history') }}" class="nav-link">History</a>
+          <a href="{{ url_for('main.trends') }}" class="nav-link">Trends</a>
           <a href="{{ url_for('main.drivers') }}" class="nav-link">Loss Drivers</a>
           <a href="{{ url_for('main.patterns') }}" class="nav-link">Patterns</a>
           {% if current_user.is_admin %}
