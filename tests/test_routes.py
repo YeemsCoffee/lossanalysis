@@ -423,12 +423,12 @@ def test_day_view_matches_the_history_row_that_was_clicked(two_stores, sqlite_db
 
 
 def test_history_row_link_carries_the_location(two_stores):
-    html = two_stores.get("/history?location=Gardena").get_data(as_text=True)
+    html = two_stores.get("/history?location=Gardena&from=2026-09-01&to=2026-09-30").get_data(as_text=True)
     assert "/day/2026-09-01?location=Gardena" in html.replace("&amp;", "&")
 
 
 def test_unfiltered_history_links_to_the_combined_day(two_stores):
-    html = two_stores.get("/history").get_data(as_text=True)
+    html = two_stores.get("/history?from=2026-09-01&to=2026-09-30").get_data(as_text=True)
     assert "/day/2026-09-01'" in html or '/day/2026-09-01"' in html
     combined = two_stores.get("/day/2026-09-01").get_data(as_text=True)
     assert ">20<" in combined, "unfiltered day should cover both stores"
@@ -969,3 +969,77 @@ def test_trends_ignores_an_unknown_location(client, sqlite_db):
 def test_trends_requires_login(client):
     r = client.get("/trends")
     assert r.status_code in (301, 302) and "/login" in r.headers["Location"]
+
+
+# --- history default range ------------------------------------------------------
+
+def _days_ago(n):
+    return (dt.date.today() - dt.timedelta(days=n)).isoformat()
+
+
+def test_history_opens_on_month_to_date(client, sqlite_db):
+    """All of history on arrival made the page slower every month."""
+    login(client)
+    today = dt.date.today().isoformat()
+    old   = _days_ago(70)                       # always a previous month
+    sqlite_db.save_day_tickets(today, make_tickets(today, [100] * 3), "Gardena")
+    sqlite_db.save_day_tickets(old,   make_tickets(old,   [100] * 7), "Gardena")
+
+    html = client.get("/history").get_data(as_text=True)
+    assert f"<strong style=\"color:var(--green);\">{today}</strong>" in html
+    # The day-by-day table shows this month only; the old day is reachable
+    # through All time, but not loaded.
+    assert f"<strong style=\"color:var(--green);\">{old}</strong>" not in html
+    assert re.search(r'background:var\(--green\)[^>]*>\s*Month to date\s*</a>', html)
+
+
+def test_an_empty_month_to_date_keeps_the_shortcuts(client, sqlite_db):
+    """Early in a month there may be nothing yet; the way out must stay."""
+    login(client)
+    old = _days_ago(70)
+    sqlite_db.save_day_tickets(old, make_tickets(old, [100]), "Gardena")
+
+    html = client.get("/history").get_data(as_text=True)
+    assert "No tickets between" in html
+    assert "All time</a>" in html
+    assert "No data yet" not in html
+
+
+def test_date_inputs_accept_the_range_being_shown(client, sqlite_db):
+    """
+    A date input refuses to submit a value past its own max, silently. With
+    "to" defaulting to today and the newest data from last week, Apply would
+    stop working.
+    """
+    login(client)
+    old = _days_ago(70)
+    sqlite_db.save_day_tickets(old, make_tickets(old, [100]), "Gardena")
+
+    html = client.get("/history").get_data(as_text=True)
+    today = dt.date.today().isoformat()
+    for name in ("from", "to"):
+        tag = re.search(rf'<input type="date" name="{name}"[^>]*>', html).group(0)
+        lo  = re.search(r'min="([^"]*)"', tag).group(1)
+        hi  = re.search(r'max="([^"]*)"', tag).group(1)
+        val = re.search(r'value="([^"]*)"', tag).group(1)
+        assert lo <= val <= hi, f"{name}={val} outside [{lo}, {hi}]"
+    assert f'max="{today}"' in html
+
+
+def test_multi_day_upload_lands_on_the_uploaded_range(client, sqlite_db):
+    """A backfill of last month must not land on a month-to-date page."""
+    login(client)
+    d1, d2 = _days_ago(70), _days_ago(69)
+    rows = ["Ticket Name,Order Source,Number of Items,Items in Ticket,"
+            "Completion Time (seconds),Time Created,Time Completed,Device Name"]
+    for i, d in enumerate((d1, d2)):
+        rows.append(f"T{i},Register,1,Latte,100,{d} 09:00:00,{d} 09:01:40,KDS1")
+
+    r = client.post("/analyze", data={
+        "csrf_token": token_from(client, "/"),
+        "location": "Koreatown",
+        "report": (io.BytesIO("\n".join(rows).encode()), "two.csv"),
+    }, content_type="multipart/form-data")
+
+    loc = r.headers["Location"]
+    assert f"from={d1}" in loc and f"to={d2}" in loc and "location=Koreatown" in loc

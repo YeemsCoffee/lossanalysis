@@ -233,7 +233,11 @@ def analyze():
                 f"({dates[0]} to {dates[-1]})",
                 "success",
             )
-            return redirect(url_for("main.history"))
+            # Straight to the uploaded range. History opens on month to date,
+            # so a backfill of last month would otherwise land on a page that
+            # does not show any of it.
+            return redirect(url_for("main.history", location=location,
+                                    **{"from": dates[0], "to": dates[-1]}))
 
     except Exception as e:
         flash(f"Could not parse report: {e}", "error")
@@ -293,6 +297,7 @@ def _date_presets(from_date, to_date, earliest, latest):
         ("Yesterday",    yesterday,                 yesterday),
         ("This week",    monday,                    today),
         ("Last week",    monday - timedelta(days=7), monday - timedelta(days=1)),
+        ("Month to date", today.replace(day=1),      today),
         ("Last 30 days", today - timedelta(days=29), today),
         # Not "All": the location tabs directly above already have an All.
         ("All time",     date.fromisoformat(earliest), date.fromisoformat(latest)),
@@ -321,9 +326,20 @@ def history():
                                target_fmt=target_fmt, target_pct=target_pct,
                                targets=targets)
 
-    from_date = request.args.get("from", earliest)
-    to_date   = request.args.get("to",   latest)
+    # Month to date unless asked otherwise. Every query on this page scales
+    # with the range, and opening on all of history made the page slower each
+    # month while answering a question nobody was asking on arrival.
+    today     = date.today()
+    from_date = request.args.get("from") or today.replace(day=1).isoformat()
+    to_date   = request.args.get("to")   or today.isoformat()
     presets   = _date_presets(from_date, to_date, earliest, latest)
+
+    # The date inputs reject a value outside their own min/max on submit, and
+    # Chrome does that without saying why — so a default of "today" on a day
+    # with no data yet would leave Apply doing nothing. Widen the bounds to
+    # include whatever range is showing.
+    picker_min = min(earliest, from_date)
+    picker_max = max(latest, to_date)
 
     loc = location if location else None
     tgt = targets["target_seconds"]
@@ -338,6 +354,7 @@ def history():
                                sync=_sync_banner(),
                                from_date=from_date, to_date=to_date,
                                earliest=earliest, latest=latest,
+                               picker_min=picker_min, picker_max=picker_max,
                                presets=presets,
                                location=location, locations=LOCATIONS,
                                target_fmt=target_fmt, target_pct=target_pct,
@@ -492,6 +509,8 @@ def history():
         earliest=earliest,
         latest=latest,
         presets=presets,
+        picker_min=picker_min,
+        picker_max=picker_max,
         period_days=len(rows),
         total_tickets=total_tickets,
         total_over=total_over,
