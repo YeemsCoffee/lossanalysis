@@ -1043,3 +1043,67 @@ def test_multi_day_upload_lands_on_the_uploaded_range(client, sqlite_db):
 
     loc = r.headers["Location"]
     assert f"from={d1}" in loc and f"to={d2}" in loc and "location=Koreatown" in loc
+
+
+# --- dict-method names in templates ----------------------------------------------
+
+def _slow_lattes_fast_bagels(db, day="2026-09-01"):
+    df = pd.concat([make_tickets(day, [500] * 30, items="Oat Latte"),
+                    make_tickets(day, [100] * 30, items="Plain Bagel", start_minute=40)],
+                   ignore_index=True)
+    db.save_day_tickets(day, df, "Gardena")
+
+
+def test_day_page_lists_the_items_on_over_target_tickets(client, sqlite_db):
+    """`t.items` resolved to dict.items and printed '<built-in method items…>'."""
+    login(client)
+    _slow_lattes_fast_bagels(sqlite_db)
+    html = client.get("/day/2026-09-01").get_data(as_text=True)
+    assert "built-in method" not in html
+    assert "Oat Latte" in html
+
+
+def test_upload_report_lists_the_items_on_over_target_tickets(client, sqlite_db):
+    login(client)
+    rows = ["Ticket Name,Order Source,Number of Items,Items in Ticket,"
+            "Completion Time (seconds),Time Created,Time Completed,Device Name"]
+    for i in range(5):
+        rows.append(f"T{i},Register,1,\"Oat Latte\",500,"
+                    f"2026-09-01 09:0{i}:00,2026-09-01 09:1{i}:00,KDS1")
+    html = client.post("/analyze", data={
+        "csrf_token": token_from(client, "/"),
+        "location": "Gardena",
+        "report": (io.BytesIO("\n".join(rows).encode()), "day.csv"),
+    }, content_type="multipart/form-data", follow_redirects=True).get_data(as_text=True)
+    assert "built-in method" not in html
+    assert "Oat Latte" in html
+
+
+def test_loss_drivers_shows_problem_items(client, sqlite_db):
+    """
+    `drivers.items` was dict.items too, so has_data read as false and the
+    section always said there was not enough data, however much there was.
+    """
+    login(client)
+    _slow_lattes_fast_bagels(sqlite_db)
+    html = client.get("/drivers?from=2026-09-01&to=2026-09-01").get_data(as_text=True)
+    assert "Not enough repeated items" not in html
+    assert "<th>Lift</th>" in html and "Oat Latte" in html
+    assert re.search(r"Baseline over-target rate: <strong>\d+(\.\d+)?%</strong>", html)
+
+
+def test_no_template_reads_a_dict_method_name_as_a_field():
+    """
+    Jinja's `x.name` tries the attribute before the key, so on a dict any
+    field sharing a method's name — items, keys, values, get, update, pop,
+    copy — silently becomes that method. Use x['name'] for those.
+    """
+    from pathlib import Path
+    names = "items|keys|values|get|update|pop|copy|clear|setdefault|popitem"
+    pattern = re.compile(rf"\{{[{{%][^}}]*?\b\w+\.({names})\b(?!\s*\()")
+    offenders = []
+    for path in Path("app/templates").glob("*.html"):
+        for n, line in enumerate(path.read_text().splitlines(), 1):
+            if pattern.search(line):
+                offenders.append(f"{path.name}:{n}: {line.strip()}")
+    assert not offenders, "\n".join(offenders)

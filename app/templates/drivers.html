@@ -130,16 +130,16 @@
 <div class="section">
   <h2>🧾 Problem Items (association lift)</h2>
   <div class="section-sub">
-    Which menu items show up in over-target tickets more than their fair share. <strong>Lift</strong> is how many times more likely a ticket goes over when it contains the item. Baseline over-target rate: <strong>{{ drivers.items.baseline }}%</strong>. Only items appearing in {{ drivers.items.min_occurrences }}+ tickets shown.
+    Which menu items show up in over-target tickets more than their fair share. <strong>Lift</strong> is how many times more likely a ticket goes over when it contains the item. Baseline over-target rate: <strong>{{ drivers['items'].baseline }}%</strong>. Only items appearing in {{ drivers['items'].min_occurrences }}+ tickets shown.
   </div>
-  {% if drivers.items.has_data %}
+  {% if drivers['items'].has_data %}
     <div class="table-wrap">
       <table>
         <thead>
           <tr><th>Item</th><th>Appears In</th><th>Over-Target</th><th>Over %</th><th>Lift</th></tr>
         </thead>
         <tbody>
-          {% for it in drivers.items.items %}
+          {% for it in drivers['items']['items'] %}
             <tr>
               <td><strong style="color:var(--green);">{{ it.name }}</strong></td>
               <td>{{ it.total }} tickets</td>

@@ -103,7 +103,7 @@
             <div class="cluster-ticket">
               <div><span class="name">{{ t.name }}</span> <span class="duration">{{ t.duration_fmt }}</span></div>
               <div class="time">{{ t.time }} · {{ t.source }} · +{{ t.over_by }} over</div>
-              <div class="items">{{ t.items }}</div>
+              <div class="items">{{ t['items'] }}</div>
             </div>
           {% endfor %}
         </div>
@@ -176,7 +176,7 @@
             <td class="duration-cell over">{{ t.duration_fmt }}</td>
             <td>+{{ t.over_by }}</td>
             <td>{{ t.source }}</td>
-            <td>{{ t.items }}</td>
+            <td>{{ t['items'] }}</td>
           </tr>
         {% endfor %}
       </tbody>
