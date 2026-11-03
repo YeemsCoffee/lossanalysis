@@ -161,11 +161,28 @@ replaces it rather than duplicating, so backfills and repeated syncs are safe.
 
 ### The scheduled job
 
-`.ebextensions/cron-square-sync.config` runs the sync **every 15 minutes while
-the stores are open** — 6:30am to 5:45pm Pacific, plus one overnight
-reconcile at 2:15am. That is 47 runs a day. Fifteen minutes is as fresh as
-the Reporting API gets, so today's numbers appear on the dashboard during
-service rather than the next morning.
+`.ebextensions/square-sync.config` installs a systemd timer that runs the sync
+**every 15 minutes while the stores are open** — 6:30am to 5:45pm Pacific,
+plus one overnight reconcile at 2:15am. That is 47 runs a day. Fifteen
+minutes is as fresh as the Reporting API gets, so today's numbers appear on
+the dashboard during service rather than the next morning.
+
+It is a systemd timer rather than a cron job for two reasons. Amazon Linux
+2023 does not install cron, so a cron file there silently never runs. And the
+timer's service reads `/opt/elasticbeanstalk/deployment/env` through systemd,
+exactly as the web app does; sourcing that file from a shell script mangles
+values containing `&`, `$` or spaces, which can empty `DATABASE_URL` and send
+the sync to a local SQLite file instead of RDS.
+
+On the instance:
+
+```
+systemctl list-timers square-sync     # when it last ran and next runs
+sudo systemctl start square-sync      # run one now, same environment
+tail -n 50 /var/log/square-sync.log   # what it did
+```
+
+The log is also in the console under **Logs > Request logs**.
 
 It keeps running to 5:45pm rather than stopping at a 5pm close on purpose:
 Square's reporting lags about 15 minutes, so the last tickets of the day only
@@ -175,7 +192,7 @@ The config also sets the instance clock to `America/Los_Angeles`. EB instances
 run UTC, where the service window is not fixed — 6:30am Pacific is 13:30 UTC
 in summer and 14:30 UTC in winter, and 5pm Pacific falls after midnight UTC.
 A hardcoded UTC schedule would drift an hour twice a year. Setting the zone
-lets the cron lines read in store time and lets DST handle itself.
+lets the timer read in store time and lets DST handle itself.
 
 One side effect: server-clock columns (`users.created_at`,
 `tickets.uploaded_at`, password-reset expiry) become Pacific rather than UTC.
